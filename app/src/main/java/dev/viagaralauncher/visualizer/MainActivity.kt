@@ -883,7 +883,11 @@ fun MainScreen(
                         color = Color(0xFFCCCCCC)
                     )
                     Text(
-                        text = "${(settings.wallpaperVerticalPosition * 100).roundToInt()}%",
+                        text = if (settings.wallpaperVerticalPosition >= 0.995f) {
+                            "100% (Base da Tela)"
+                        } else {
+                            "${(settings.wallpaperVerticalPosition * 100).roundToInt()}%"
+                        },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = settings.barColor
@@ -893,7 +897,7 @@ fun MainScreen(
                 Slider(
                     value = settings.wallpaperVerticalPosition,
                     onValueChange = { prefs.setWallpaperVerticalPosition(it) },
-                    valueRange = 0.10f..0.95f,
+                    valueRange = 0.10f..1.00f,
                     colors = SliderDefaults.colors(
                         thumbColor = settings.barColor,
                         activeTrackColor = settings.barColor,
@@ -1005,11 +1009,13 @@ fun MainScreen(
                             .fillMaxSize()
                             .background(Color.Black.copy(alpha = settings.wallpaperDim))
                     )
+                    val previewBottomPadding = ((1f - settings.wallpaperVerticalPosition) * 35f).coerceAtLeast(0f).dp
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.BottomCenter)
-                            .padding(horizontal = 10.dp, vertical = (8 * settings.wallpaperVerticalPosition).dp)
+                            .padding(horizontal = 10.dp)
+                            .padding(bottom = previewBottomPadding)
                     ) {
                         AudioVisualizerView(
                             height = (settings.wallpaperHeightDp * 0.40f).dp,

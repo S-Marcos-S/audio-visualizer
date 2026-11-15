@@ -354,7 +354,9 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             val startX = (w - totalWidth) / 2f
 
             // Posição vertical e altura totalmente reativas às configurações
-            val baselineY = h * settings.wallpaperVerticalPosition
+            val isAtBottom = settings.wallpaperVerticalPosition >= 0.99f
+            val baselineY = if (isAtBottom) h else (h * settings.wallpaperVerticalPosition)
+            val bottomOffset = if (isAtBottom) cr else 0f
             val maxBarHeight = (settings.wallpaperHeightDp * density).coerceAtLeast(stripW)
 
             val baseBarArgb = settings.barColor.toArgb()
@@ -375,11 +377,11 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                     guidePaint.color = baseBarArgb
                     guidePaint.alpha = trackAlphaInt
 
-                    rectF.set(x, baselineY - maxBarHeight, x + half, baselineY)
+                    rectF.set(x, baselineY - maxBarHeight, x + half, baselineY + bottomOffset)
                     canvas.drawRoundRect(rectF, cr, cr, guidePaint)
 
                     guidePaint.alpha = (trackAlphaInt * 0.9f).toInt()
-                    rectF.set(rx, baselineY - maxBarHeight, rx + half, baselineY)
+                    rectF.set(rx, baselineY - maxBarHeight, rx + half, baselineY + bottomOffset)
                     canvas.drawRoundRect(rectF, cr, cr, guidePaint)
                 }
 
@@ -390,7 +392,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                     barPaint.color = baseBarArgb
                     barPaint.alpha = (stripAlpha * 255).toInt().coerceIn(0, 255)
 
-                    rectF.set(x, baselineY - lh, x + half, baselineY)
+                    rectF.set(x, baselineY - lh, x + half, baselineY + bottomOffset)
                     canvas.drawRoundRect(rectF, cr, cr, barPaint)
                 }
 
@@ -413,7 +415,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                     rightBarPaint.color = baseBarArgb
                     rightBarPaint.alpha = (rightStripAlpha * 255).toInt().coerceIn(0, 255)
 
-                    rectF.set(rx, baselineY - rh, rx + half, baselineY)
+                    rectF.set(rx, baselineY - rh, rx + half, baselineY + bottomOffset)
                     canvas.drawRoundRect(rectF, cr, cr, rightBarPaint)
                 }
 

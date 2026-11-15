@@ -26,7 +26,7 @@ data class VisualizerSettings(
     val isFloatingAtBottom: Boolean = true,
     val wallpaperDim: Float = 0.20f,
     val wallpaperHeightDp: Int = 110,
-    val wallpaperVerticalPosition: Float = 0.82f,
+    val wallpaperVerticalPosition: Float = 1.00f,
     val wallpaperShowGuides: Boolean = true,
 )
 
@@ -71,7 +71,7 @@ class VisualizerPreferences(context: Context) {
         val floatingBottom = prefs.getBoolean(KEY_FLOATING_BOTTOM, true)
         val wallpaperDim = prefs.getFloat(KEY_WALLPAPER_DIM, 0.20f)
         val wallpaperHeight = prefs.getInt(KEY_WALLPAPER_HEIGHT, 110)
-        val wallpaperVerticalPosition = prefs.getFloat(KEY_WALLPAPER_VERTICAL_POS, 0.82f)
+        val wallpaperVerticalPosition = prefs.getFloat(KEY_WALLPAPER_VERTICAL_POS, 1.00f)
         val wallpaperShowGuides = prefs.getBoolean(KEY_WALLPAPER_SHOW_GUIDES, true)
 
         return VisualizerSettings(
@@ -146,7 +146,7 @@ class VisualizerPreferences(context: Context) {
     }
 
     fun setWallpaperVerticalPosition(position: Float) {
-        val clamped = position.coerceIn(0.10f, 0.95f)
+        val clamped = position.coerceIn(0.10f, 1.00f)
         prefs.edit().putFloat(KEY_WALLPAPER_VERTICAL_POS, clamped).apply()
         updateSettings { it.copy(wallpaperVerticalPosition = clamped) }
         AudioVisualizerWallpaperService.reloadSettings()
