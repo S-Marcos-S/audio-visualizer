@@ -121,7 +121,9 @@ jobs:
           "
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+        run: |
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
 
       - name: Build Release APK with Gradle (R8 Minification)
         run: |
