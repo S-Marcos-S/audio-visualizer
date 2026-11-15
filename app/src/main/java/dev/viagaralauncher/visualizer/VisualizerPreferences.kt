@@ -4,6 +4,7 @@ package dev.viagaralauncher.visualizer
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,10 +33,24 @@ class VisualizerPreferences(context: Context) {
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<VisualizerSettings> = _settings.asStateFlow()
 
+    private fun getStoredColor(key: String, defaultColor: Color): Color {
+        val defaultArgb = defaultColor.toArgb()
+        val argb = try {
+            prefs.getInt(key, defaultArgb)
+        } catch (_: ClassCastException) {
+            try {
+                prefs.getLong(key, defaultArgb.toLong()).toInt()
+            } catch (_: Throwable) {
+                defaultArgb
+            }
+        }
+        return Color(argb)
+    }
+
     private fun loadSettings(): VisualizerSettings {
         val speed = prefs.getFloat(KEY_SPEED, 0.50f)
-        val barColorLong = prefs.getLong(KEY_BAR_COLOR, 0xFF00E5FFL)
-        val peakColorLong = prefs.getLong(KEY_PEAK_COLOR, 0xFFFF4081L)
+        val barColor = getStoredColor(KEY_BAR_COLOR, Color(0xFF00E5FF))
+        val peakColor = getStoredColor(KEY_PEAK_COLOR, Color(0xFFFF4081))
         val trackAlpha = prefs.getFloat(KEY_TRACK_ALPHA, 0.05f)
         val isAlwaysOn = prefs.getBoolean(KEY_ALWAYS_ON, true)
         val isFloating = prefs.getBoolean(KEY_FLOATING_ENABLED, false)
@@ -44,8 +59,8 @@ class VisualizerPreferences(context: Context) {
 
         return VisualizerSettings(
             speed = speed,
-            barColor = Color(barColorLong.toULong()),
-            peakColor = Color(peakColorLong.toULong()),
+            barColor = barColor,
+            peakColor = peakColor,
             trackAlpha = trackAlpha,
             isAlwaysOn = isAlwaysOn,
             isFloatingEnabled = isFloating,
@@ -62,11 +77,11 @@ class VisualizerPreferences(context: Context) {
     }
 
     fun setColors(barColor: Color, peakColor: Color) {
-        val barLong = barColor.value.toLong()
-        val peakLong = peakColor.value.toLong()
         prefs.edit()
-            .putLong(KEY_BAR_COLOR, barLong)
-            .putLong(KEY_PEAK_COLOR, peakLong)
+            .remove(KEY_BAR_COLOR)
+            .remove(KEY_PEAK_COLOR)
+            .putInt(KEY_BAR_COLOR, barColor.toArgb())
+            .putInt(KEY_PEAK_COLOR, peakColor.toArgb())
             .apply()
         _settings.value = _settings.value.copy(barColor = barColor, peakColor = peakColor)
     }

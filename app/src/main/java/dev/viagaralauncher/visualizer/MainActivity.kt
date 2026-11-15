@@ -564,7 +564,7 @@ fun MainScreen(
                     value = hueBar,
                     onValueChange = {
                         hueBar = it
-                        val newBar = Color.hsv(it, 1.0f, 1.0f)
+                        val newBar = Color(android.graphics.Color.HSVToColor(floatArrayOf(it, 1.0f, 1.0f)))
                         prefs.setColors(newBar, settings.peakColor)
                         AudioVisualizerWidgetReceiver.updateAllWidgets(context)
                     },
@@ -588,7 +588,7 @@ fun MainScreen(
                     value = huePeak,
                     onValueChange = {
                         huePeak = it
-                        val newPeak = Color.hsv(it, 0.85f, 1.0f)
+                        val newPeak = Color(android.graphics.Color.HSVToColor(floatArrayOf(it, 0.85f, 1.0f)))
                         prefs.setColors(settings.barColor, newPeak)
                         AudioVisualizerWidgetReceiver.updateAllWidgets(context)
                     },
