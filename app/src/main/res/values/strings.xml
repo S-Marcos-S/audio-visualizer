@@ -18,4 +18,30 @@
     <string name="always_on_desc">Mantém o visualizador capturando continuamente mesmo sem MediaSession detectada</string>
     <string name="waiting_audio">Aguardando reprodução de áudio...</string>
     <string name="audio_active">Sinal de Áudio Detectado (60 FPS)</string>
+
+    <!-- Atualizações / Updates (Wallpapers FOSS update system) -->
+    <string name="settings_section_updates">Atualizações</string>
+    <string name="settings_beta_tester_title">Canal Beta / Teste</string>
+    <string name="settings_beta_tester_desc">Receber versões de teste e experimentais antes do lançamento público estável</string>
+    <string name="update_beta_badge">BETA</string>
+    <string name="update_available_title">Atualização Disponível</string>
+    <string name="update_checking">Verificando novas versões…</string>
+    <string name="update_up_to_date">Aplicativo atualizado</string>
+    <string name="update_current_version">Versão instalada</string>
+    <string name="update_version_label">Versão</string>
+    <string name="update_installing_root">Instalando via Superusuário…</string>
+    <string name="update_download_failed">Falha no download</string>
+    <string name="update_toast_root_success">Atualizado com sucesso via Root!</string>
+    <string name="update_toast_root_failed">Falha na instalação via Root: %1$s</string>
+    <string name="action_download_update">Baixar Atualização</string>
+    <string name="action_check_updates">Buscar Atualizações</string>
+    <string name="action_install">Instalar</string>
+    <string name="action_install_root">Instalar (Root)</string>
+    <string name="action_retry">Tentar Novamente</string>
+    <string name="action_show_more">Mostrar mais</string>
+    <string name="action_show_less">Mostrar menos</string>
+    <string name="update_notification_channel_name">Atualizações do aplicativo</string>
+    <string name="update_notification_channel_desc">Avisos sobre novas versões disponíveis do Audio Visualizer</string>
+    <string name="update_notification_title">Audio Visualizer %1$s disponível</string>
+    <string name="update_notification_text">Toque para ver o que há de novo e atualizar</string>
 </resources>

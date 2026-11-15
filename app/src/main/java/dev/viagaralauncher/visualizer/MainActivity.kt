@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,12 +35,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,6 +51,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -68,10 +74,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import dev.viagaralauncher.visualizer.update.DownloadStatus
+import dev.viagaralauncher.visualizer.update.RootInstaller
+import dev.viagaralauncher.visualizer.update.UpdateInfo
+import dev.viagaralauncher.visualizer.update.UpdateManager
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -90,6 +108,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = VisualizerPreferences(this)
         playbackTracker = MediaPlaybackTracker(this)
+
+        UpdateManager.init(this)
+        UpdateManager.cleanupDownloadedApk(this)
+        UpdateManager.checkForUpdates(this, force = false)
 
         requestAudioPermissionIfNeeded()
 
@@ -174,6 +196,12 @@ fun MainScreen(
     val settings by prefs.settings.collectAsState()
     val frame by AudioVisualizerManager.frameFlow.collectAsState()
     val scope = rememberCoroutineScope()
+
+    val updateInfo by UpdateManager.updateAvailable.collectAsState()
+    val isCheckingUpdates by UpdateManager.isCheckingUpdates.collectAsState()
+    val downloadStatus by UpdateManager.downloadStatus.collectAsState()
+    var isBetaTester by remember { mutableStateOf(UpdateManager.isBetaTesterEnabled(context)) }
+    val isRoot = remember { RootInstaller.isRootAvailable() }
 
     var rootInfo by remember { mutableStateOf(RootInfo(RootStatus.CHECKING, "Verificando permissões de root...", "")) }
     var isCheckingRoot by remember { mutableStateOf(false) }
@@ -702,6 +730,458 @@ fun MainScreen(
             }
         }
 
+        // 6. Atualizações do Aplicativo
+        UpdateStatusCard(
+            updateInfo = updateInfo,
+            isChecking = isCheckingUpdates,
+            downloadStatus = downloadStatus,
+            isRoot = isRoot,
+            accentColor = settings.barColor,
+            onCheckAgain = {
+                UpdateManager.checkForUpdates(context, force = true)
+            },
+            onDownload = { info ->
+                UpdateManager.downloadUpdate(context, info)
+            },
+            onInstall = { uri, useRoot ->
+                UpdateManager.installUpdate(context, uri, useRoot)
+            }
+        )
+
+        // 7. Canal Beta / Teste
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.settings_beta_tester_title),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(R.string.settings_beta_tester_desc),
+                        fontSize = 11.sp,
+                        color = Color(0xFF888888),
+                        lineHeight = 16.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = isBetaTester,
+                    onCheckedChange = { checked ->
+                        isBetaTester = checked
+                        UpdateManager.setBetaTesterEnabled(context, checked)
+                        UpdateManager.checkForUpdates(context, force = true)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = settings.barColor,
+                        checkedTrackColor = settings.barColor.copy(alpha = 0.4f)
+                    )
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun UpdateStatusCard(
+    updateInfo: UpdateInfo?,
+    isChecking: Boolean,
+    downloadStatus: DownloadStatus,
+    isRoot: Boolean,
+    accentColor: Color,
+    onCheckAgain: () -> Unit,
+    onDownload: (UpdateInfo) -> Unit,
+    onInstall: (Uri, Boolean) -> Unit
+) {
+    var isChangelogExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (updateInfo != null && updateInfo.hasUpdate) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(R.string.update_available_title),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = accentColor
+                            )
+                            if (updateInfo.isBeta) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color(0xFFFF9100).copy(alpha = 0.2f))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.update_beta_badge),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFFF9100)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${stringResource(R.string.update_version_label)}: ${updateInfo.displayVersion}",
+                            fontSize = 12.sp,
+                            color = Color(0xFFAAAAAA)
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Filled.SystemUpdate,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                if (updateInfo.changelog.isNotBlank()) {
+                    val formattedChangelog = remember(updateInfo.changelog, accentColor) {
+                        formatMarkdownToAnnotated(updateInfo.changelog, accentColor)
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF141414))
+                            .padding(10.dp)
+                    ) {
+                        if (isChangelogExpanded) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 240.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                Text(
+                                    text = formattedChangelog,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFDDDDDD),
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = formattedChangelog,
+                                fontSize = 12.sp,
+                                color = Color(0xFFDDDDDD),
+                                maxLines = 4,
+                                overflow = TextOverflow.Ellipsis,
+                                lineHeight = 16.sp
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { isChangelogExpanded = !isChangelogExpanded }
+                                .padding(vertical = 4.dp, horizontal = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isChangelogExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = stringResource(if (isChangelogExpanded) R.string.action_show_less else R.string.action_show_more),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = accentColor
+                            )
+                        }
+                    }
+                }
+
+                when (val status = downloadStatus) {
+                    is DownloadStatus.Idle -> {
+                        Button(
+                            onClick = { onDownload(updateInfo) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accentColor,
+                                contentColor = Color.Black
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_download_update),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    is DownloadStatus.Downloading -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { status.progressPercent / 100f },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = accentColor,
+                                trackColor = Color(0xFF333333)
+                            )
+                            Text(
+                                text = "${status.progressPercent}%",
+                                fontSize = 11.sp,
+                                color = accentColor,
+                                modifier = Modifier.align(Alignment.End),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                    is DownloadStatus.Finished -> {
+                        val uri = status.fileUri
+                        if (uri != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (isRoot) {
+                                    Button(
+                                        onClick = { onInstall(uri, true) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = accentColor,
+                                            contentColor = Color.Black
+                                        ),
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.action_install_root),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                                Button(
+                                    onClick = { onInstall(uri, false) },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = if (isRoot) {
+                                        ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = Color(0xFF2E2E2E),
+                                            contentColor = Color.White
+                                        )
+                                    } else {
+                                        ButtonDefaults.buttonColors(
+                                            containerColor = accentColor,
+                                            contentColor = Color.Black
+                                        )
+                                    },
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.action_install),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    is DownloadStatus.InstallingRoot -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = accentColor
+                            )
+                            Text(
+                                text = stringResource(R.string.update_installing_root),
+                                fontSize = 12.sp,
+                                color = Color.White
+                            )
+                        }
+                    }
+                    is DownloadStatus.Failed -> {
+                        Text(
+                            text = "${stringResource(R.string.update_download_failed)}: ${status.error}",
+                            fontSize = 12.sp,
+                            color = Color(0xFFFF5252)
+                        )
+                        Button(
+                            onClick = { onDownload(updateInfo) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2E2E2E),
+                                contentColor = Color.White
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_retry),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isChecking) stringResource(R.string.update_checking) else stringResource(R.string.update_up_to_date),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${stringResource(R.string.update_current_version)}: v${BuildConfig.VERSION_NAME}",
+                            fontSize = 12.sp,
+                            color = Color(0xFF888888)
+                        )
+                    }
+
+                    if (isChecking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = accentColor
+                        )
+                    } else {
+                        IconButton(onClick = onCheckAgain) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = stringResource(R.string.action_check_updates),
+                                tint = accentColor
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatMarkdownToAnnotated(text: String, primaryColor: Color): AnnotatedString {
+    return buildAnnotatedString {
+        val lines = text.lines()
+        lines.forEachIndexed { index, rawLine ->
+            val trimmed = rawLine.trim()
+            when {
+                trimmed.startsWith("---") || trimmed.startsWith("***") -> {
+                    // subtle spacing
+                }
+                trimmed.startsWith("###") -> {
+                    val content = trimmed.removePrefix("###").trim()
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = primaryColor)) {
+                        append(content)
+                    }
+                }
+                trimmed.startsWith("##") -> {
+                    val content = trimmed.removePrefix("##").trim()
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = primaryColor)) {
+                        append(content)
+                    }
+                }
+                trimmed.startsWith("#") -> {
+                    val content = trimmed.removePrefix("#").trim()
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = primaryColor)) {
+                        append(content)
+                    }
+                }
+                trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+                    append("• ")
+                    parseInlineMarkdown(trimmed.substring(2).trim())
+                }
+                else -> {
+                    parseInlineMarkdown(trimmed)
+                }
+            }
+
+            if (index < lines.lastIndex && trimmed.isNotBlank()) {
+                append("\n")
+            }
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.parseInlineMarkdown(line: String) {
+    val tokenRegex = Regex("""(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)""")
+    var lastIndex = 0
+    for (match in tokenRegex.findAll(line)) {
+        if (match.range.first > lastIndex) {
+            append(line.substring(lastIndex, match.range.first))
+        }
+        val fullMatch = match.value
+        when {
+            fullMatch.startsWith("**") && fullMatch.endsWith("**") -> {
+                val inner = fullMatch.substring(2, fullMatch.length - 2)
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(inner)
+                }
+            }
+            fullMatch.startsWith("*") && fullMatch.endsWith("*") -> {
+                val inner = fullMatch.substring(1, fullMatch.length - 1)
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                    append(inner)
+                }
+            }
+            fullMatch.startsWith("`") && fullMatch.endsWith("`") -> {
+                val inner = fullMatch.substring(1, fullMatch.length - 1)
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFF2A2A2A))) {
+                    append(inner)
+                }
+            }
+            else -> append(fullMatch)
+        }
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < line.length) {
+        append(line.substring(lastIndex))
     }
 }
