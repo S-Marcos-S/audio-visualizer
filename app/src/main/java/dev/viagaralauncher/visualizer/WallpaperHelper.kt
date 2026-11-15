@@ -20,13 +20,23 @@ object WallpaperHelper {
 
     private const val TAG = "WallpaperHelper"
     private const val CUSTOM_WALLPAPER_FILENAME = "custom_wallpaper.jpg"
+    private const val SYSTEM_WALLPAPER_FILENAME = "system_wallpaper.jpg"
 
     fun getCustomWallpaperFile(context: Context): File {
         return File(context.filesDir, CUSTOM_WALLPAPER_FILENAME)
     }
 
+    fun getSystemWallpaperFile(context: Context): File {
+        return File(context.filesDir, SYSTEM_WALLPAPER_FILENAME)
+    }
+
     fun hasCustomWallpaper(context: Context): Boolean {
         val file = getCustomWallpaperFile(context)
+        return file.exists() && file.length() > 0
+    }
+
+    fun hasSystemWallpaper(context: Context): Boolean {
+        val file = getSystemWallpaperFile(context)
         return file.exists() && file.length() > 0
     }
 
@@ -35,6 +45,68 @@ object WallpaperHelper {
         val deleted = if (file.exists()) file.delete() else true
         AudioVisualizerWallpaperService.reloadWallpaper()
         return deleted
+    }
+
+    /**
+     * Extrai o papel de parede do sistema diretamente dos diretórios internos do Android
+     * utilizando privilégios de Root (su). Funciona em qualquer versão do Android (incluindo Android 14 e 15),
+     * contornando as restrições da API WallpaperManager.
+     */
+    fun extractSystemWallpaperWithRoot(context: Context): Boolean {
+        val destFile = getSystemWallpaperFile(context)
+        val tempFile = File(context.filesDir, "temp_sys_wallpaper")
+
+        try {
+            val script = """
+                for p in /data/system/users/0/wallpaper_orig /data/system/users/0/wallpaper /data/system/users/*/wallpaper_orig /data/system/users/*/wallpaper /data/system/wallpaper_orig /data/system/wallpaper /data/system/users/0/wallpaper_file; do
+                    if [ -f "${'$'}p" ] && [ -s "${'$'}p" ]; then
+                        cp "${'$'}p" "${tempFile.absolutePath}" && chmod 666 "${tempFile.absolutePath}" && exit 0
+                    fi
+                done
+                exit 1
+            """.trimIndent()
+
+            val process = ProcessBuilder("su", "-c", script).start()
+            val exitCode = process.waitFor()
+
+            if (exitCode == 0 && tempFile.exists() && tempFile.length() > 0) {
+                val opts = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val bmp = BitmapFactory.decodeFile(tempFile.absolutePath, opts)
+                if (bmp != null) {
+                    FileOutputStream(destFile).use { out ->
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    }
+                    bmp.recycle()
+                    tempFile.delete()
+                    Log.i(TAG, "Papel de parede do sistema capturado com sucesso via Root! Tamanho: ${destFile.length()} bytes")
+                    AudioVisualizerWallpaperService.reloadWallpaper()
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao extrair wallpaper com root: ${e.message}", e)
+        } finally {
+            if (tempFile.exists()) tempFile.delete()
+        }
+        return false
+    }
+
+    /**
+     * Garante que o wallpaper do usuário esteja disponível localmente em disco.
+     * Tenta primeiro a extração via Root; se falhar, tenta fallback via WallpaperManager.
+     */
+    fun ensureWallpaperCaptured(context: Context): Boolean {
+        if (hasCustomWallpaper(context) || hasSystemWallpaper(context)) {
+            return true
+        }
+
+        if (extractSystemWallpaperWithRoot(context)) {
+            return true
+        }
+
+        return captureSystemWallpaperFallback(context)
     }
 
     fun saveCustomWallpaper(context: Context, imageUri: Uri): Boolean {
@@ -82,23 +154,20 @@ object WallpaperHelper {
         }
     }
 
-    fun captureSystemWallpaper(context: Context): Boolean {
+    private fun captureSystemWallpaperFallback(context: Context): Boolean {
         return try {
             val wm = WallpaperManager.getInstance(context)
             val drawable: Drawable? = try {
                 wm.drawable
-            } catch (_: SecurityException) {
+            } catch (_: Throwable) {
                 try {
                     wm.peekDrawable()
                 } catch (_: Throwable) {
                     null
                 }
-            } catch (_: Throwable) {
-                null
             }
 
             if (drawable == null) {
-                Log.w(TAG, "Não foi possível extrair o drawable do WallpaperManager")
                 return false
             }
 
@@ -114,7 +183,7 @@ object WallpaperHelper {
                 bmp
             }
 
-            val destFile = getCustomWallpaperFile(context)
+            val destFile = getSystemWallpaperFile(context)
             FileOutputStream(destFile).use { output ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
             }
@@ -122,12 +191,13 @@ object WallpaperHelper {
             AudioVisualizerWallpaperService.reloadWallpaper()
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao capturar papel de parede do sistema: ${e.message}", e)
+            Log.e(TAG, "Erro no fallback do WallpaperManager: ${e.message}")
             false
         }
     }
 
     fun loadWallpaperBitmap(context: Context, targetWidth: Int, targetHeight: Int): Bitmap? {
+        // 1. Foto customizada da galeria escolhida pelo usuário
         val customFile = getCustomWallpaperFile(context)
         if (customFile.exists() && customFile.length() > 0) {
             try {
@@ -141,7 +211,32 @@ object WallpaperHelper {
             }
         }
 
-        // Tenta fallback com o WallpaperManager
+        // 2. Wallpaper do sistema capturado via Root ou salvo anteriormente
+        val systemFile = getSystemWallpaperFile(context)
+        if (systemFile.exists() && systemFile.length() > 0) {
+            try {
+                val opts = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val bmp = BitmapFactory.decodeFile(systemFile.absolutePath, opts)
+                if (bmp != null) return bmp
+            } catch (e: Exception) {
+                Log.w(TAG, "Falha ao decodificar wallpaper do sistema armazenado: ${e.message}")
+            }
+        }
+
+        // 3. Tenta extrair agora via Root caso ainda não tenha sido extraído
+        if (extractSystemWallpaperWithRoot(context)) {
+            try {
+                val opts = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val bmp = BitmapFactory.decodeFile(systemFile.absolutePath, opts)
+                if (bmp != null) return bmp
+            } catch (_: Exception) {}
+        }
+
+        // 4. Fallback no WallpaperManager (Android <= 13)
         return try {
             val wm = WallpaperManager.getInstance(context)
             val drawable = try {

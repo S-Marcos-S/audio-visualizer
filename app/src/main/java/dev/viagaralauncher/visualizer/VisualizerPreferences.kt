@@ -32,10 +32,22 @@ data class VisualizerSettings(
 
 class VisualizerPreferences(context: Context) {
 
-    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private val _settings = MutableStateFlow(loadSettings())
-    val settings: StateFlow<VisualizerSettings> = _settings.asStateFlow()
+    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        val updated = loadSettings()
+        _sharedSettings.value = updated
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        if (_sharedSettings.value == null) {
+            _sharedSettings.value = loadSettings()
+        }
+    }
+
+    val settings: StateFlow<VisualizerSettings>
+        get() = _observableSettings
 
     private fun getStoredColor(key: String, defaultColor: Color): Color {
         val defaultArgb = defaultColor.toArgb()
@@ -51,7 +63,7 @@ class VisualizerPreferences(context: Context) {
         return Color(argb)
     }
 
-    private fun loadSettings(): VisualizerSettings {
+    fun loadSettings(): VisualizerSettings {
         val speed = prefs.getFloat(KEY_SPEED, 0.50f)
         val barColor = getStoredColor(KEY_BAR_COLOR, Color(0xFF00E5FF))
         val peakColor = getStoredColor(KEY_PEAK_COLOR, Color(0xFFFF4081))
@@ -84,8 +96,9 @@ class VisualizerPreferences(context: Context) {
     fun setSpeed(speed: Float) {
         val clamped = speed.coerceIn(0.10f, 1.00f)
         prefs.edit().putFloat(KEY_SPEED, clamped).apply()
-        _settings.value = _settings.value.copy(speed = clamped)
+        updateSettings { it.copy(speed = clamped) }
         AudioVisualizerManager.setSpeed(clamped)
+        AudioVisualizerWallpaperService.reloadSettings()
     }
 
     fun setColors(barColor: Color, peakColor: Color) {
@@ -95,52 +108,63 @@ class VisualizerPreferences(context: Context) {
             .putInt(KEY_BAR_COLOR, barColor.toArgb())
             .putInt(KEY_PEAK_COLOR, peakColor.toArgb())
             .apply()
-        _settings.value = _settings.value.copy(barColor = barColor, peakColor = peakColor)
+        updateSettings { it.copy(barColor = barColor, peakColor = peakColor) }
+        AudioVisualizerWallpaperService.reloadSettings()
     }
 
     fun setAlwaysOn(alwaysOn: Boolean) {
         prefs.edit().putBoolean(KEY_ALWAYS_ON, alwaysOn).apply()
-        _settings.value = _settings.value.copy(isAlwaysOn = alwaysOn)
+        updateSettings { it.copy(isAlwaysOn = alwaysOn) }
         AudioVisualizerManager.setAlwaysOn(alwaysOn)
     }
 
     fun setFloatingEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_FLOATING_ENABLED, enabled).apply()
-        _settings.value = _settings.value.copy(isFloatingEnabled = enabled)
+        updateSettings { it.copy(isFloatingEnabled = enabled) }
     }
 
     fun setFloatingHeight(heightDp: Int) {
         val clamped = heightDp.coerceIn(40, 240)
         prefs.edit().putInt(KEY_FLOATING_HEIGHT, clamped).apply()
-        _settings.value = _settings.value.copy(floatingHeightDp = clamped)
+        updateSettings { it.copy(floatingHeightDp = clamped) }
     }
 
     fun setFloatingPosition(atBottom: Boolean) {
         prefs.edit().putBoolean(KEY_FLOATING_BOTTOM, atBottom).apply()
-        _settings.value = _settings.value.copy(isFloatingAtBottom = atBottom)
+        updateSettings { it.copy(isFloatingAtBottom = atBottom) }
     }
 
     fun setWallpaperDim(dim: Float) {
         val clamped = dim.coerceIn(0.00f, 0.70f)
         prefs.edit().putFloat(KEY_WALLPAPER_DIM, clamped).apply()
-        _settings.value = _settings.value.copy(wallpaperDim = clamped)
+        updateSettings { it.copy(wallpaperDim = clamped) }
+        AudioVisualizerWallpaperService.reloadSettings()
     }
 
     fun setWallpaperHeight(heightDp: Int) {
         val clamped = heightDp.coerceIn(40, 260)
         prefs.edit().putInt(KEY_WALLPAPER_HEIGHT, clamped).apply()
-        _settings.value = _settings.value.copy(wallpaperHeightDp = clamped)
+        updateSettings { it.copy(wallpaperHeightDp = clamped) }
+        AudioVisualizerWallpaperService.reloadSettings()
     }
 
     fun setWallpaperVerticalPosition(position: Float) {
         val clamped = position.coerceIn(0.10f, 0.95f)
         prefs.edit().putFloat(KEY_WALLPAPER_VERTICAL_POS, clamped).apply()
-        _settings.value = _settings.value.copy(wallpaperVerticalPosition = clamped)
+        updateSettings { it.copy(wallpaperVerticalPosition = clamped) }
+        AudioVisualizerWallpaperService.reloadSettings()
     }
 
     fun setWallpaperShowGuides(showGuides: Boolean) {
         prefs.edit().putBoolean(KEY_WALLPAPER_SHOW_GUIDES, showGuides).apply()
-        _settings.value = _settings.value.copy(wallpaperShowGuides = showGuides)
+        updateSettings { it.copy(wallpaperShowGuides = showGuides) }
+        AudioVisualizerWallpaperService.reloadSettings()
+    }
+
+    private inline fun updateSettings(transform: (VisualizerSettings) -> VisualizerSettings) {
+        val current = _sharedSettings.value ?: loadSettings()
+        val updated = transform(current)
+        _sharedSettings.value = updated
     }
 
     companion object {
@@ -157,6 +181,26 @@ class VisualizerPreferences(context: Context) {
         private const val KEY_WALLPAPER_HEIGHT = "viz_wallpaper_height"
         private const val KEY_WALLPAPER_VERTICAL_POS = "viz_wallpaper_vert_pos"
         private const val KEY_WALLPAPER_SHOW_GUIDES = "viz_wallpaper_show_guides"
+
+        private val _sharedSettings = MutableStateFlow<VisualizerSettings?>(null)
+        private val _fallbackDefaultSettings = VisualizerSettings()
+
+        private val _observableSettings: StateFlow<VisualizerSettings> = MutableStateFlow(_fallbackDefaultSettings).apply {
+            // Se já inicializado, assume o valor atual
+            val initial = _sharedSettings.value
+            if (initial != null) value = initial
+        }
+
+        init {
+            // Garante reflexo contínuo das alterações no StateFlow exposto
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+                _sharedSettings.collect { value ->
+                    if (value != null) {
+                        (_observableSettings as MutableStateFlow).value = value
+                    }
+                }
+            }
+        }
 
         val PRESETS = listOf(
             ColorPreset("Neon Cyan", Color(0xFF00E5FF), Color(0xFFFF4081)),

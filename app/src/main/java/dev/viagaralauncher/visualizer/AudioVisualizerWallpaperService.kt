@@ -90,15 +90,17 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             super.onCreate(surfaceHolder)
             activeEngines.add(this)
 
-            // Observa configurações
+            // Observa configurações continuamente
             engineScope.launch {
                 prefs.settings.collectLatest { newSettings ->
                     settings = newSettings
-                    scheduleRenderPass()
+                    withContext(Dispatchers.Main) {
+                        forceRenderCurrentFrame()
+                    }
                 }
             }
 
-            // Observa novos frames de áudio para acordar o renderizador quando necessário
+            // Observa frames de áudio para acordar o renderizador
             engineScope.launch {
                 AudioVisualizerManager.frameFlow.collectLatest { frame ->
                     if (frame.hasAudio && isEngineVisible && !isFrameCallbackScheduled) {
@@ -128,8 +130,20 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             AudioVisualizerManager.onWallpaperVisibilityChanged(this@AudioVisualizerWallpaperService, visible)
 
             if (visible) {
+                // Atualiza configurações mais recentes
+                settings = prefs.settings.value
+
+                // Se o bitmap não estiver carregado, recarrega
+                val bmp = wallpaperBitmap
+                if (bmp == null || bmp.isRecycled) {
+                    loadWallpaperAsync()
+                }
+
                 playbackTracker.startTracking()
                 lastFrameTimeNanos = 0L
+
+                // Força render imediato do estado atual
+                forceRenderCurrentFrame()
                 scheduleNextFrame()
             } else {
                 playbackTracker.stopTracking()
@@ -152,7 +166,13 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                 AndroidColor.parseColor("#1E1E1E"),
                 Shader.TileMode.CLAMP
             )
-            scheduleRenderPass()
+
+            val bmp = wallpaperBitmap
+            if (bmp == null || bmp.isRecycled) {
+                loadWallpaperAsync()
+            } else {
+                forceRenderCurrentFrame()
+            }
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
@@ -171,7 +191,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             super.onOffsetsChanged(xOffset, yOffset, xOffsetStep, yOffsetStep, xPixelOffset, yPixelOffset)
             if (xOffset in 0f..1f && xOffset != xParallaxOffset) {
                 xParallaxOffset = xOffset
-                scheduleRenderPass()
+                forceRenderCurrentFrame()
             }
         }
 
@@ -181,27 +201,26 @@ class AudioVisualizerWallpaperService : WallpaperService() {
 
         fun requestReloadSettings() {
             settings = prefs.settings.value
-            scheduleRenderPass()
+            forceRenderCurrentFrame()
         }
 
         private fun loadWallpaperAsync() {
             engineScope.launch(Dispatchers.IO) {
+                val targetW = if (surfaceWidth > 0) surfaceWidth else 1080
+                val targetH = if (surfaceHeight > 0) surfaceHeight else 2400
                 val bmp = WallpaperHelper.loadWallpaperBitmap(
                     this@AudioVisualizerWallpaperService,
-                    surfaceWidth,
-                    surfaceHeight
+                    targetW,
+                    targetH
                 )
                 withContext(Dispatchers.Main) {
-                    wallpaperBitmap?.recycle()
+                    val old = wallpaperBitmap
                     wallpaperBitmap = bmp
-                    scheduleRenderPass()
+                    if (old != null && old != bmp) {
+                        old.recycle()
+                    }
+                    forceRenderCurrentFrame()
                 }
-            }
-        }
-
-        private fun scheduleRenderPass() {
-            if (isEngineVisible && !isFrameCallbackScheduled) {
-                scheduleNextFrame()
             }
         }
 
@@ -233,8 +252,8 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             val frame = AudioVisualizerManager.frameFlow.value
             val targetAlpha = if (frame.hasAudio) 1f else 0f
 
-            // Fade in/out suave (~350ms)
-            val fadeSpeed = 1f / 0.35f
+            // Fade in/out suave (~300ms)
+            val fadeSpeed = 1f / 0.30f
             if (activeAlphaAnim < targetAlpha) {
                 activeAlphaAnim = (activeAlphaAnim + fadeSpeed * dtSeconds).coerceAtMost(1f)
             } else if (activeAlphaAnim > targetAlpha) {
@@ -247,6 +266,12 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             if (activeAlphaAnim > 0.001f || frame.hasAudio) {
                 scheduleNextFrame()
             }
+        }
+
+        private fun forceRenderCurrentFrame() {
+            if (!isEngineVisible) return
+            val frame = AudioVisualizerManager.frameFlow.value
+            renderCurrentFrame(frame)
         }
 
         private fun renderCurrentFrame(frame: VisualizerFrame) {
@@ -303,7 +328,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                     canvas.drawRect(0f, 0f, sw, sh, dimPaint)
                 }
             } else {
-                // Fundo gradiente moderno caso não haja imagem
+                // Fundo gradiente moderno caso não haja imagem carregada
                 canvas.drawRect(0f, 0f, sw, sh, gradientPaint)
             }
         }
@@ -328,7 +353,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             val totalWidth = strips * stripW + (strips - 1) * gap
             val startX = (w - totalWidth) / 2f
 
-            // Posição vertical configurável
+            // Posição vertical e altura totalmente reativas às configurações
             val baselineY = h * settings.wallpaperVerticalPosition
             val maxBarHeight = (settings.wallpaperHeightDp * density).coerceAtLeast(stripW)
 
@@ -343,9 +368,10 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                 val x = startX + i * (stripW + gap)
                 val rx = x + stripW / 2f + 1f * density
 
-                // 1. Guias de trilhas de fundo translúcidas
+                // 1. Guias de trilhas de fundo translúcidas nítidas
                 if (showGuides) {
-                    val trackAlphaInt = (settings.trackAlpha.coerceAtLeast(0.12f) * 255).toInt().coerceIn(0, 255)
+                    val trackAlphaFloat = settings.trackAlpha.coerceAtLeast(0.28f)
+                    val trackAlphaInt = (trackAlphaFloat * 255).toInt().coerceIn(0, 255)
                     guidePaint.color = baseBarArgb
                     guidePaint.alpha = trackAlphaInt
 

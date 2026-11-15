@@ -221,6 +221,12 @@ fun MainScreen(
     var rootInfo by remember { mutableStateOf(RootInfo(RootStatus.CHECKING, "Verificando permissões de root...", "")) }
     var isCheckingRoot by remember { mutableStateOf(false) }
     var hasCustomWallpaper by remember { mutableStateOf(WallpaperHelper.hasCustomWallpaper(context)) }
+    var hasSystemWallpaper by remember { mutableStateOf(WallpaperHelper.hasSystemWallpaper(context)) }
+
+    fun refreshWallpaperState() {
+        hasCustomWallpaper = WallpaperHelper.hasCustomWallpaper(context)
+        hasSystemWallpaper = WallpaperHelper.hasSystemWallpaper(context)
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -229,7 +235,7 @@ fun MainScreen(
             scope.launch(Dispatchers.IO) {
                 val success = WallpaperHelper.saveCustomWallpaper(context, uri)
                 withContext(Dispatchers.Main) {
-                    hasCustomWallpaper = WallpaperHelper.hasCustomWallpaper(context)
+                    refreshWallpaperState()
                     val msg = if (success) "Papel de parede personalizado aplicado!" else "Falha ao carregar imagem"
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
@@ -247,6 +253,12 @@ fun MainScreen(
 
     LaunchedEffect(Unit) {
         refreshRoot()
+        scope.launch(Dispatchers.IO) {
+            WallpaperHelper.ensureWallpaperCaptured(context)
+            withContext(Dispatchers.Main) {
+                refreshWallpaperState()
+            }
+        }
     }
 
     Column(
@@ -707,7 +719,13 @@ fun MainScreen(
                 // Botão Aplicar como Papel de Parede
                 Button(
                     onClick = {
-                        WallpaperHelper.openLiveWallpaperChooser(context)
+                        scope.launch(Dispatchers.IO) {
+                            WallpaperHelper.ensureWallpaperCaptured(context)
+                            withContext(Dispatchers.Main) {
+                                refreshWallpaperState()
+                                WallpaperHelper.openLiveWallpaperChooser(context)
+                            }
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -732,12 +750,37 @@ fun MainScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Fundo do Papel de Parede
-                Text(
-                    text = stringResource(R.string.wallpaper_bg_title),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.wallpaper_bg_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(if (hasCustomWallpaper || hasSystemWallpaper) Color(0xFF00E676) else Color(0xFFFF9100))
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = when {
+                                hasCustomWallpaper -> "Foto da Galeria"
+                                hasSystemWallpaper -> "Wallpaper do Sistema"
+                                else -> "Gradiente Escuro"
+                            },
+                            fontSize = 11.sp,
+                            color = Color(0xFFAAAAAA)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -777,10 +820,10 @@ fun MainScreen(
                     Button(
                         onClick = {
                             scope.launch(Dispatchers.IO) {
-                                val success = WallpaperHelper.captureSystemWallpaper(context)
+                                val success = WallpaperHelper.extractSystemWallpaperWithRoot(context)
                                 withContext(Dispatchers.Main) {
-                                    hasCustomWallpaper = WallpaperHelper.hasCustomWallpaper(context)
-                                    val msg = if (success) "Wallpaper capturado do sistema!" else "Não foi possível capturar o wallpaper"
+                                    refreshWallpaperState()
+                                    val msg = if (success) "Wallpaper do sistema capturado com sucesso!" else "Não foi possível extrair o wallpaper"
                                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                 }
                             }
@@ -807,8 +850,8 @@ fun MainScreen(
                     Button(
                         onClick = {
                             WallpaperHelper.removeCustomWallpaper(context)
-                            hasCustomWallpaper = false
-                            Toast.makeText(context, "Imagem customizada removida", Toast.LENGTH_SHORT).show()
+                            refreshWallpaperState()
+                            Toast.makeText(context, "Imagem customizada removida. Usando papel de parede do sistema.", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp),
@@ -943,6 +986,44 @@ fun MainScreen(
                             checkedThumbColor = settings.barColor,
                             checkedTrackColor = settings.barColor.copy(alpha = 0.4f)
                         )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Prévia ao vivo da Home Screen
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF141414))
+                        .border(1.dp, Color(0xFF2E2E2E), RoundedCornerShape(12.dp))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = settings.wallpaperDim))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 10.dp, vertical = (8 * settings.wallpaperVerticalPosition).dp)
+                    ) {
+                        AudioVisualizerView(
+                            height = (settings.wallpaperHeightDp * 0.40f).dp,
+                            barColor = settings.barColor,
+                            peakColor = settings.peakColor,
+                            trackColor = if (settings.wallpaperShowGuides) settings.barColor.copy(alpha = 0.28f) else Color.Transparent
+                        )
+                    }
+                    Text(
+                        text = "Pré-visualização do Live Wallpaper",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF888888),
+                        modifier = Modifier.padding(8.dp)
                     )
                 }
             }
