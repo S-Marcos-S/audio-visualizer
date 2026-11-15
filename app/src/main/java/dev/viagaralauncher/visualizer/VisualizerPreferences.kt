@@ -35,19 +35,16 @@ class VisualizerPreferences(context: Context) {
     private val prefs: SharedPreferences = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-        val updated = loadSettings()
-        _sharedSettings.value = updated
+        _sharedSettings.value = loadSettings()
     }
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
-        if (_sharedSettings.value == null) {
-            _sharedSettings.value = loadSettings()
-        }
+        _sharedSettings.value = loadSettings()
     }
 
     val settings: StateFlow<VisualizerSettings>
-        get() = _observableSettings
+        get() = _sharedSettings.asStateFlow()
 
     private fun getStoredColor(key: String, defaultColor: Color): Color {
         val defaultArgb = defaultColor.toArgb()
@@ -162,7 +159,7 @@ class VisualizerPreferences(context: Context) {
     }
 
     private inline fun updateSettings(transform: (VisualizerSettings) -> VisualizerSettings) {
-        val current = _sharedSettings.value ?: loadSettings()
+        val current = _sharedSettings.value
         val updated = transform(current)
         _sharedSettings.value = updated
     }
@@ -182,25 +179,7 @@ class VisualizerPreferences(context: Context) {
         private const val KEY_WALLPAPER_VERTICAL_POS = "viz_wallpaper_vert_pos"
         private const val KEY_WALLPAPER_SHOW_GUIDES = "viz_wallpaper_show_guides"
 
-        private val _sharedSettings = MutableStateFlow<VisualizerSettings?>(null)
-        private val _fallbackDefaultSettings = VisualizerSettings()
-
-        private val _observableSettings: StateFlow<VisualizerSettings> = MutableStateFlow(_fallbackDefaultSettings).apply {
-            // Se já inicializado, assume o valor atual
-            val initial = _sharedSettings.value
-            if (initial != null) value = initial
-        }
-
-        init {
-            // Garante reflexo contínuo das alterações no StateFlow exposto
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-                _sharedSettings.collect { value ->
-                    if (value != null) {
-                        (_observableSettings as MutableStateFlow).value = value
-                    }
-                }
-            }
-        }
+        private val _sharedSettings = MutableStateFlow(VisualizerSettings())
 
         val PRESETS = listOf(
             ColorPreset("Neon Cyan", Color(0xFF00E5FF), Color(0xFFFF4081)),
