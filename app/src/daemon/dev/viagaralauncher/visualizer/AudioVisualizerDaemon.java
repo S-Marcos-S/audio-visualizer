@@ -4,14 +4,18 @@ package dev.viagaralauncher.visualizer;
 import android.media.audiofx.Visualizer;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.os.Looper;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Daemon autônomo executado sob UID 0 (root) através do /system/bin/app_process64.
- * Captura a saída de áudio global do sistema através da Sessão 0.
+ * Daemon autônomo executado sob UID 0 (root) através do app_process.
+ * Captura a saída de áudio global do sistema através da Sessão 0,
+ * decompõe o sinal em 14 bandas acústicas logarítmicas de 25 Hz a 18.500 Hz,
+ * aplica a integração espectral de Parseval (RMS) e transmite os dados
+ * via stdout (pipe direto do processo) e LocalSocket.
  */
 public final class AudioVisualizerDaemon {
 
@@ -23,83 +27,121 @@ public final class AudioVisualizerDaemon {
     private AudioVisualizerDaemon() {}
 
     public static void main(String[] args) {
-        Visualizer visualizer = null;
-        LocalSocket socket = null;
-        OutputStream outStream = null;
-        InputStream inStream = null;
+        System.err.println("VIZ_DAEMON: Iniciando daemon (UID=" + android.os.Process.myUid() + ", PID=" + android.os.Process.myPid() + ")");
 
+        // 1. Inicializa Looper para dar suporte a chamadas de Handler e AudioEffect
+        try {
+            if (Looper.myLooper() == null) {
+                Looper.prepareMainLooper();
+            }
+        } catch (Throwable t) {
+            try {
+                Looper.prepare();
+            } catch (Throwable ignored) {}
+        }
+
+        // 2. Conexão opcional com LocalSocket (se o servidor LocalServerSocket estiver disponível)
+        LocalSocket socket = null;
+        OutputStream socketOut = null;
+        InputStream socketIn = null;
         try {
             socket = new LocalSocket();
-            boolean connected = false;
-            for (int i = 0; i < 50; i++) {
-                try {
-                    socket.connect(new LocalSocketAddress(SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
-                    connected = true;
-                    break;
-                } catch (Throwable t) {
-                    Thread.sleep(100);
-                }
-            }
-
-            if (!connected) return;
-
+            socket.connect(new LocalSocketAddress(SOCKET_NAME, LocalSocketAddress.Namespace.ABSTRACT));
             socket.setSoTimeout(500);
-            outStream = socket.getOutputStream();
-            inStream = socket.getInputStream();
+            socketOut = socket.getOutputStream();
+            socketIn = socket.getInputStream();
+            System.err.println("VIZ_DAEMON: Conectado ao LocalSocket abstrato: " + SOCKET_NAME);
+        } catch (Throwable t) {
+            System.err.println("VIZ_DAEMON: LocalSocket indisponivel (streaming principal via stdout): " + t.getMessage());
+            try { if (socket != null) socket.close(); } catch (Throwable ignored) {}
+            socket = null;
+        }
 
-            // Inicialização da Sessão Global 0 com permissão root
-            visualizer = new Visualizer(0);
-            visualizer.setCaptureSize(CAPTURE_SIZE);
-            visualizer.setEnabled(true);
-
-            int actualCaptureSize = visualizer.getCaptureSize();
-            int rawSampleRate = visualizer.getSamplingRate();
-            int sampleRateHz = (rawSampleRate > 0) ? (rawSampleRate / 1000) : 48000;
-            float binWidth = (float) sampleRateHz / (float) actualCaptureSize;
-
-            // 14 Bandas Logarítmicas
-            float[] bandFreqs = new float[] {
-                25f, 65f, 115f, 175f, 260f, 390f, 580f, 870f,
-                1300f, 2000f, 3200f, 5000f, 8000f, 12500f, 18500f
-            };
-
-            int[] bandStartBins = new int[NUM_BANDS];
-            int[] bandEndBins = new int[NUM_BANDS];
-            int lastEndBin = 0;
-            for (int b = 0; b < NUM_BANDS; b++) {
-                int start = Math.max(lastEndBin + 1, Math.round(bandFreqs[b] / binWidth));
-                int end = Math.max(start, Math.round(bandFreqs[b + 1] / binWidth));
-                bandStartBins[b] = start;
-                bandEndBins[b] = Math.min(511, end);
-                lastEndBin = bandEndBins[b];
+        // 3. Inicialização da Sessão Global 0 com permissão root
+        Visualizer visualizer = null;
+        for (int attempt = 1; attempt <= 10; attempt++) {
+            try {
+                visualizer = new Visualizer(0);
+                visualizer.setCaptureSize(CAPTURE_SIZE);
+                visualizer.setEnabled(true);
+                System.err.println("VIZ_DAEMON: Visualizer(0) inicializado com sucesso! captureSize=" 
+                        + visualizer.getCaptureSize() + ", sampleRate=" + visualizer.getSamplingRate());
+                break;
+            } catch (Throwable t) {
+                System.err.println("VIZ_DAEMON: Tentativa " + attempt + " de criar Visualizer(0) falhou: " + t.getMessage());
+                try {
+                    Thread.sleep(300);
+                } catch (Throwable ignored) {}
             }
+        }
 
-            float uniformGain = 1.25f;
-            float[] emaBands = new float[NUM_BANDS];
-            byte[] fftBuffer = new byte[CAPTURE_SIZE];
-            byte[] waveBuffer = new byte[CAPTURE_SIZE];
-            float[] magnitudes = new float[NUM_BANDS];
+        if (visualizer == null) {
+            System.err.println("VIZ_DAEMON: FATAL - Nao foi possivel inicializar Visualizer na Sessao 0 apos 10 tentativas.");
+            return;
+        }
 
-            ByteBuffer packetBuffer = ByteBuffer.allocate(4 + 1 + 4 + (NUM_BANDS * 4));
-            packetBuffer.order(ByteOrder.LITTLE_ENDIAN);
+        int actualCaptureSize = visualizer.getCaptureSize();
+        int rawSampleRate = visualizer.getSamplingRate();
+        int sampleRateHz = (rawSampleRate > 0) ? (rawSampleRate / 1000) : 48000;
+        float binWidth = (float) sampleRateHz / (float) actualCaptureSize;
 
-            boolean isPaused = false;
+        // 14 Bandas Logarítmicas (25 Hz – 18.5 kHz)
+        float[] bandFreqs = new float[] {
+            25f, 65f, 115f, 175f, 260f, 390f, 580f, 870f,
+            1300f, 2000f, 3200f, 5000f, 8000f, 12500f, 18500f
+        };
 
+        int[] bandStartBins = new int[NUM_BANDS];
+        int[] bandEndBins = new int[NUM_BANDS];
+        int lastEndBin = 0;
+        for (int b = 0; b < NUM_BANDS; b++) {
+            int start = Math.max(lastEndBin + 1, Math.round(bandFreqs[b] / binWidth));
+            int end = Math.max(start, Math.round(bandFreqs[b + 1] / binWidth));
+            bandStartBins[b] = start;
+            bandEndBins[b] = Math.min(511, end);
+            lastEndBin = bandEndBins[b];
+        }
+
+        float uniformGain = 1.40f;
+        float[] emaBands = new float[NUM_BANDS];
+        byte[] fftBuffer = new byte[CAPTURE_SIZE];
+        byte[] waveBuffer = new byte[CAPTURE_SIZE];
+        float[] magnitudes = new float[NUM_BANDS];
+
+        ByteBuffer packetBuffer = ByteBuffer.allocate(4 + 1 + 4 + (NUM_BANDS * 4));
+        packetBuffer.order(ByteOrder.LITTLE_ENDIAN);
+
+        boolean isPaused = false;
+
+        try {
             while (true) {
-                while (inStream.available() > 0) {
-                    int cmd = inStream.read();
+                // Leitura de comandos de controle via LocalSocket (se conectado)
+                if (socketIn != null && socketIn.available() > 0) {
+                    int cmd = socketIn.read();
                     if (cmd == -1 || cmd == 'S' || cmd == 'Q') {
+                        System.err.println("VIZ_DAEMON: Comando de parada recebido via socket.");
                         return;
                     } else if (cmd == 'P') {
-                        if (!isPaused) {
-                            isPaused = true;
-                            try { visualizer.setEnabled(false); } catch (Throwable ignored) {}
-                        }
+                        isPaused = true;
+                        try { visualizer.setEnabled(false); } catch (Throwable ignored) {}
                     } else if (cmd == 'R') {
-                        if (isPaused) {
-                            isPaused = false;
-                            try { visualizer.setEnabled(true); } catch (Throwable ignored) {}
-                        }
+                        isPaused = false;
+                        try { visualizer.setEnabled(true); } catch (Throwable ignored) {}
+                    }
+                }
+
+                // Leitura de comandos de controle via stdin (pipe direto do processo pai)
+                if (System.in.available() > 0) {
+                    int cmd = System.in.read();
+                    if (cmd == -1 || cmd == 'S' || cmd == 'Q') {
+                        System.err.println("VIZ_DAEMON: Comando de parada recebido via stdin.");
+                        return;
+                    } else if (cmd == 'P') {
+                        isPaused = true;
+                        try { visualizer.setEnabled(false); } catch (Throwable ignored) {}
+                    } else if (cmd == 'R') {
+                        isPaused = false;
+                        try { visualizer.setEnabled(true); } catch (Throwable ignored) {}
                     }
                 }
 
@@ -148,8 +190,21 @@ public final class AudioVisualizerDaemon {
                     packetBuffer.putFloat(magnitudes[b]);
                 }
 
-                outStream.write(packetBuffer.array());
-                outStream.flush();
+                byte[] packetData = packetBuffer.array();
+
+                // Transmissão via stdout (Canal de Pipe Principal - Imune a restrições de SELinux de socket)
+                System.out.write(packetData);
+                System.out.flush();
+
+                // Transmissão via LocalSocket secundário (se ativo)
+                if (socketOut != null) {
+                    try {
+                        socketOut.write(packetData);
+                        socketOut.flush();
+                    } catch (Throwable t) {
+                        socketOut = null;
+                    }
+                }
 
                 long elapsed = System.currentTimeMillis() - loopStartTime;
                 long sleepTime = FRAME_INTERVAL_MS - elapsed;
@@ -157,12 +212,15 @@ public final class AudioVisualizerDaemon {
                     Thread.sleep(sleepTime);
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            System.err.println("VIZ_DAEMON: Erro no loop de captura: " + t.getMessage());
+            t.printStackTrace(System.err);
         } finally {
+            System.err.println("VIZ_DAEMON: Finalizando recursos do daemon...");
             try { if (visualizer != null) visualizer.setEnabled(false); } catch (Throwable ignored) {}
             try { if (visualizer != null) visualizer.release(); } catch (Throwable ignored) {}
-            try { if (inStream != null) inStream.close(); } catch (Throwable ignored) {}
-            try { if (outStream != null) outStream.close(); } catch (Throwable ignored) {}
+            try { if (socketIn != null) socketIn.close(); } catch (Throwable ignored) {}
+            try { if (socketOut != null) socketOut.close(); } catch (Throwable ignored) {}
             try { if (socket != null) socket.close(); } catch (Throwable ignored) {}
         }
     }

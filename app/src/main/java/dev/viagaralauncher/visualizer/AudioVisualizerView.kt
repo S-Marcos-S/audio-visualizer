@@ -17,7 +17,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -26,7 +25,7 @@ import androidx.compose.ui.unit.dp
  * - 14 tiras duplas (Canais Esquerdo e Direito) com atenuação estéreo no canal direito
  * - Marcadores de pico flutuantes independentes (Instant rise + Asymptotic descent)
  * - Transição suave de fade-in e fade-out (350ms)
- * - Compatível com cores dinâmicas do Material 3
+ * - Guias de trilhas elegantes visíveis mesmo em estado ocioso
  */
 @Composable
 fun AudioVisualizerView(
@@ -34,17 +33,15 @@ fun AudioVisualizerView(
     height: Dp = Dp.Unspecified,
     barColor: Color = MaterialTheme.colorScheme.primary,
     peakColor: Color = MaterialTheme.colorScheme.tertiary,
-    trackColor: Color = barColor.copy(alpha = 0.05f),
+    trackColor: Color = barColor.copy(alpha = 0.08f),
 ) {
     val frame by AudioVisualizerManager.frameFlow.collectAsState()
 
-    val alphaAnim by animateFloatAsState(
+    val activeAlphaAnim by animateFloatAsState(
         targetValue = if (frame.hasAudio) 1f else 0f,
         animationSpec = tween(durationMillis = 350),
         label = "visualizerFade",
     )
-
-    if (alphaAnim <= 0.001f) return
 
     val boxModifier = if (height != Dp.Unspecified) {
         modifier.fillMaxWidth().height(height)
@@ -53,11 +50,7 @@ fun AudioVisualizerView(
     }
 
     Box(modifier = boxModifier) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = alphaAnim }
-        ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
             val bands = frame.bands
             val peaks = frame.peaks
             val strips = bands.size
@@ -88,9 +81,9 @@ fun AudioVisualizerView(
                 val x = startX + i * (stripW + gap)
                 val rx = x + stripW / 2f + 1f * density
 
-                // 1. Guias de fundo transparentes
+                // 1. Guias de fundo translúcidas
                 if (trackColor.alpha > 0f) {
-                    val trackAlpha = trackColor.alpha * 0.4f
+                    val trackAlpha = trackColor.alpha.coerceAtLeast(0.12f)
                     drawRoundRect(
                         color = trackColor.copy(alpha = trackAlpha),
                         topLeft = Offset(x, baselineY - maxBarHeight),
@@ -107,8 +100,8 @@ fun AudioVisualizerView(
 
                 // 2. Barra principal do Canal Esquerdo
                 val lh = (v * maxBarHeight).coerceAtLeast(0f)
-                if (lh > 1f) {
-                    val stripAlpha = (0.35f + v * 0.65f).coerceIn(0.2f, 0.95f)
+                if (lh > 1f && activeAlphaAnim > 0.01f) {
+                    val stripAlpha = (0.35f + v * 0.65f).coerceIn(0.2f, 0.95f) * activeAlphaAnim
                     drawRoundRect(
                         color = barColor.copy(alpha = barColor.alpha * stripAlpha),
                         topLeft = Offset(x, baselineY - lh),
@@ -119,21 +112,21 @@ fun AudioVisualizerView(
 
                 // 3. Marcador de pico do Canal Esquerdo
                 val pkH = (pk * maxBarHeight).coerceAtLeast(0f)
-                if (pk > 0.03f && pkH > 2f) {
+                if (pk > 0.03f && pkH > 2f && activeAlphaAnim > 0.01f) {
                     val peakTop = (baselineY - pkH - 2f * density).coerceAtLeast(0f)
                     drawRoundRect(
-                        color = peakColor.copy(alpha = 0.88f),
+                        color = peakColor.copy(alpha = 0.88f * activeAlphaAnim),
                         topLeft = Offset(x, peakTop),
                         size = Size(half, peakBlockHeight),
                         cornerRadius = CornerRadius(peakCr, peakCr),
                     )
                 }
 
-                // 4. Barra principal do Canal Direito (atenuação 0.92f)
+                // 4. Barra principal do Canal Direito (atenuação estéreo de 0.92f)
                 val rv = v * 0.92f
                 val rh = (rv * maxBarHeight).coerceAtLeast(0f)
-                if (rh > 1f) {
-                    val rightStripAlpha = (0.35f + rv * 0.65f) * 0.9f
+                if (rh > 1f && activeAlphaAnim > 0.01f) {
+                    val rightStripAlpha = (0.35f + rv * 0.65f) * 0.9f * activeAlphaAnim
                     drawRoundRect(
                         color = barColor.copy(alpha = (barColor.alpha * rightStripAlpha).coerceIn(0.18f, 0.85f)),
                         topLeft = Offset(rx, baselineY - rh),
@@ -145,10 +138,10 @@ fun AudioVisualizerView(
                 // 5. Marcador de pico do Canal Direito
                 val rpk = (pk * 0.92f).coerceIn(0f, 1f)
                 val rpkH = (rpk * maxBarHeight).coerceAtLeast(0f)
-                if (rpk > 0.03f && rpkH > 2f) {
+                if (rpk > 0.03f && rpkH > 2f && activeAlphaAnim > 0.01f) {
                     val rightPeakTop = (baselineY - rpkH - 2f * density).coerceAtLeast(0f)
                     drawRoundRect(
-                        color = peakColor.copy(alpha = 0.78f),
+                        color = peakColor.copy(alpha = 0.78f * activeAlphaAnim),
                         topLeft = Offset(rx, rightPeakTop),
                         size = Size(half, peakBlockHeight),
                         cornerRadius = CornerRadius(peakCr, peakCr),

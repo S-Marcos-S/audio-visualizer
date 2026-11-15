@@ -2,8 +2,7 @@
 package dev.viagaralauncher.visualizer
 
 import android.content.Context
-import android.net.LocalServerSocket
-import android.net.LocalSocket
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +54,7 @@ private enum class VisualizerState {
 
 object AudioVisualizerManager {
 
-    private const val SOCKET_NAME = "viagara_audio_viz"
+    private const val TAG = "AudioVisualizer"
     private const val NUM_BANDS = 14
 
     private val _frameFlow = MutableStateFlow(VisualizerFrame())
@@ -69,20 +68,15 @@ object AudioVisualizerManager {
     private var supervisorJob: Job? = null
     private var readerJob: Job? = null
 
-    private var serverSocket: LocalServerSocket? = null
-    private var clientSocket: LocalSocket? = null
-    private var clientOut: OutputStream? = null
-
     private var daemonProcess: Process? = null
-    private var daemonPid: Int = -1
 
     private val currentLevels = FloatArray(NUM_BANDS)
     private val currentPeaks = FloatArray(NUM_BANDS)
 
-    // Curva de Equalização de Ruído Rosa (1/f)
+    // Curva de Equalização Acústica de Ruído Rosa (1/f)
     private val SPECTRAL_WEIGHTS = floatArrayOf(
-        0.88f, 0.86f, 0.88f, 0.91f, 0.94f, 0.97f, 1.00f,
-        1.03f, 1.06f, 1.08f, 1.10f, 1.12f, 1.14f, 1.14f
+        0.90f, 0.88f, 0.90f, 0.93f, 0.96f, 0.98f, 1.00f,
+        1.03f, 1.06f, 1.08f, 1.10f, 1.12f, 1.14f, 1.15f
     )
 
     @Volatile
@@ -236,7 +230,7 @@ object AudioVisualizerManager {
 
     private fun sendControlCommand(cmd: Char) {
         try {
-            clientOut?.let {
+            daemonProcess?.outputStream?.let {
                 it.write(cmd.code)
                 it.flush()
             }
@@ -244,22 +238,14 @@ object AudioVisualizerManager {
     }
 
     private suspend fun runSupervisor(context: Context, generation: Long) = withContext(Dispatchers.IO) {
-        var localDaemonPid = -1
-        var localProcess: Process? = null
-        var localClient: LocalSocket? = null
+        var process: Process? = null
         try {
-            try {
-                serverSocket = LocalServerSocket(SOCKET_NAME)
-            } catch (_: Throwable) {
-                serverSocket?.close()
-                serverSocket = LocalServerSocket(SOCKET_NAME)
-            }
-
             lifecycleMutex.withLock {
                 if (generation != currentGeneration) return@withContext
             }
 
             val dexPath = extractOrPrepareDex(context) ?: run {
+                Log.e(TAG, "Falha ao preparar visualizer_daemon.dex")
                 lifecycleMutex.withLock {
                     if (generation == currentGeneration) {
                         cleanupDaemonLocked(generation)
@@ -269,79 +255,64 @@ object AudioVisualizerManager {
                 return@withContext
             }
 
-            // Executa o daemon como Root via app_process64
             val launchScript = """
+                base=/data/local/tmp
+                mkdir -p ${'$'}base/dalvik-cache
+                chmod 777 ${'$'}base/dalvik-cache 2>/dev/null
+                export ANDROID_DATA=${'$'}base
                 export CLASSPATH="$dexPath"
-                /system/bin/app_process64 /data/local/tmp dev.viagaralauncher.visualizer.AudioVisualizerDaemon &
-                echo "PID:${'$'}!"
-                wait
+
+                APP_PROCESS="/system/bin/app_process64"
+                if [ ! -f "${'$'}APP_PROCESS" ]; then
+                    if [ -f "/system/bin/app_process" ]; then
+                        APP_PROCESS="/system/bin/app_process"
+                    elif [ -f "/system/bin/app_process32" ]; then
+                        APP_PROCESS="/system/bin/app_process32"
+                    else
+                        APP_PROCESS="app_process"
+                    fi
+                fi
+
+                exec ${'$'}APP_PROCESS ${'$'}base dev.viagaralauncher.visualizer.AudioVisualizerDaemon
             """.trimIndent()
 
-            val process = ProcessBuilder("su", "-c", launchScript).start()
-            localProcess = process
+            Log.i(TAG, "Iniciando daemon via su com dex em: $dexPath")
+            process = ProcessBuilder("su", "-c", launchScript).start()
 
-            val reader = process.inputStream.bufferedReader()
-            var extractedPid = -1
-            val timeoutMillis = System.currentTimeMillis() + 2000L
-            while (System.currentTimeMillis() < timeoutMillis) {
-                if (reader.ready()) {
-                    val line = reader.readLine() ?: break
-                    if (line.startsWith("PID:")) {
-                        extractedPid = line.substring(4).trim().toIntOrNull() ?: -1
-                        break
+            // Monitoramento e log de diagnósticos do stderr do daemon
+            val errStream = process.errorStream
+            scope.launch(Dispatchers.IO) {
+                try {
+                    errStream.bufferedReader().useLines { lines ->
+                        lines.forEach { line ->
+                            Log.i("VizDaemon", line)
+                        }
                     }
-                } else {
-                    delay(40)
-                }
+                } catch (_: Throwable) {}
             }
-            localDaemonPid = extractedPid
 
             lifecycleMutex.withLock {
                 if (generation != currentGeneration || currentState != VisualizerState.STARTING) {
-                    terminateProcessAndPid(process, localDaemonPid)
+                    process.destroy()
                     return@withContext
                 }
                 daemonProcess = process
-                daemonPid = extractedPid
-            }
-
-            val client = serverSocket?.accept() ?: run {
-                lifecycleMutex.withLock {
-                    if (generation == currentGeneration) {
-                        cleanupDaemonLocked(generation)
-                        currentState = VisualizerState.STOPPED
-                    }
-                }
-                return@withContext
-            }
-            localClient = client
-
-            lifecycleMutex.withLock {
-                if (generation != currentGeneration || currentState != VisualizerState.STARTING) {
-                    try { client.close() } catch (_: Throwable) {}
-                    if (generation == currentGeneration) {
-                        cleanupDaemonLocked(generation)
-                    } else {
-                        terminateProcessAndPid(process, localDaemonPid)
-                    }
-                    return@withLock
-                }
-                clientSocket = client
-                clientOut = client.outputStream
                 currentState = VisualizerState.RUNNING
             }
 
-            startReaderLoop(client.inputStream)
-        } catch (_: Throwable) {
+            // Inicia leitura de alta performance dos quadros binários (65 bytes a 60 FPS)
+            startReaderLoop(process.inputStream)
+
+            val exitCode = process.waitFor()
+            Log.i(TAG, "Daemon encerrado com codigo $exitCode")
+
+        } catch (e: Throwable) {
+            Log.e(TAG, "Erro no supervisor do visualizador: ${e.message}", e)
+        } finally {
             lifecycleMutex.withLock {
                 if (generation == currentGeneration) {
                     cleanupDaemonLocked(generation)
                     currentState = VisualizerState.STOPPED
-                } else {
-                    try { localClient?.close() } catch (_: Throwable) {}
-                    if (localDaemonPid > 0 && localDaemonPid != daemonPid) {
-                        terminateProcessAndPid(localProcess, localDaemonPid)
-                    }
                 }
             }
         }
@@ -349,10 +320,11 @@ object AudioVisualizerManager {
 
     private fun startReaderLoop(inputStream: InputStream) {
         readerJob?.cancel()
-        readerJob = scope.launch(Dispatchers.Default) {
+        readerJob = scope.launch(Dispatchers.IO) {
             val packetSize = 4 + 1 + 4 + (NUM_BANDS * 4) // 65 bytes
-            val rawBytes = ByteArray(packetSize)
-            val byteBuffer = ByteBuffer.wrap(rawBytes).order(ByteOrder.LITTLE_ENDIAN)
+            val payloadSize = packetSize - 4 // 61 bytes após o cabeçalho 'V','I','Z','1'
+            val payloadBuffer = ByteArray(payloadSize)
+            val byteBuffer = ByteBuffer.wrap(payloadBuffer).order(ByteOrder.LITTLE_ENDIAN)
             val incomingBands = FloatArray(NUM_BANDS)
 
             while (isActive && (currentState == VisualizerState.RUNNING || currentState == VisualizerState.PAUSED)) {
@@ -361,31 +333,44 @@ object AudioVisualizerManager {
                     continue
                 }
 
+                // 1. Sincronização estrita de frame com o cabeçalho 'V', 'I', 'Z', '1'
+                var b = inputStream.read()
+                while (b != -1 && b.toByte() != 'V'.code.toByte() && isActive) {
+                    b = inputStream.read()
+                }
+                if (b == -1 || !isActive) break
+
+                val b2 = inputStream.read()
+                val b3 = inputStream.read()
+                val b4 = inputStream.read()
+                if (b2 != 'I'.code || b3 != 'Z'.code || b4 != '1'.code) {
+                    continue
+                }
+
+                // 2. Leitura dos 61 bytes restantes do pacote
                 var totalRead = 0
-                while (totalRead < packetSize && isActive) {
-                    val read = inputStream.read(rawBytes, totalRead, packetSize - totalRead)
+                while (totalRead < payloadSize && isActive) {
+                    val read = inputStream.read(payloadBuffer, totalRead, payloadSize - totalRead)
                     if (read == -1) break
                     totalRead += read
                 }
-                if (totalRead < packetSize) break
+                if (totalRead < payloadSize || !isActive) break
 
-                if (rawBytes[0] != 'V'.code.toByte() ||
-                    rawBytes[1] != 'I'.code.toByte() ||
-                    rawBytes[2] != 'Z'.code.toByte() ||
-                    rawBytes[3] != '1'.code.toByte()
-                ) continue
+                // 3. Decodificação dos campos binários Little-Endian
+                byteBuffer.position(0)
+                val bandsCount = byteBuffer.get().toInt()
+                if (bandsCount != NUM_BANDS) continue
 
-                byteBuffer.position(5)
                 val rms = byteBuffer.float
-                for (b in 0 until NUM_BANDS) {
-                    incomingBands[b] = byteBuffer.float
+                for (i in 0 until NUM_BANDS) {
+                    incomingBands[i] = byteBuffer.float
                 }
 
                 var activeSignal = false
                 val bandsOut = FloatArray(NUM_BANDS)
                 val peaksOut = FloatArray(NUM_BANDS)
 
-                // Cálculo da balística
+                // 4. Parâmetros dinâmicos de balística física
                 val normSpeed = ((currentSpeed - 0.10f) / 0.90f).coerceIn(0f, 1f)
                 val speedCurve = normSpeed.pow(1.4f)
 
@@ -395,36 +380,26 @@ object AudioVisualizerManager {
 
                 for (i in 0 until NUM_BANDS) {
                     val rawTarget = incomingBands[i].coerceIn(0f, 1f)
-                    if (rawTarget > 0.01f) activeSignal = true
+                    if (rawTarget > 0.005f) activeSignal = true
 
                     val target = when (i) {
-                        0 -> {
-                            val cleaned = ((rawTarget - 0.11f) / 0.89f).coerceIn(0f, 1f)
-                            (cleaned.pow(1.25f) * 0.88f).coerceIn(0f, 1f)
-                        }
-                        1 -> {
-                            val cleaned = ((rawTarget - 0.08f) / 0.92f).coerceIn(0f, 1f)
-                            (cleaned.pow(1.22f) * 0.85f).coerceIn(0f, 1f)
-                        }
-                        2 -> {
-                            val cleaned = ((rawTarget - 0.06f) / 0.94f).coerceIn(0f, 1f)
-                            (cleaned.pow(1.18f) * 0.86f).coerceIn(0f, 1f)
-                        }
+                        0 -> ((rawTarget - 0.03f) / 0.97f).coerceIn(0f, 1f)
+                        1 -> ((rawTarget - 0.02f) / 0.98f).coerceIn(0f, 1f)
+                        2 -> ((rawTarget - 0.01f) / 0.99f).coerceIn(0f, 1f)
                         else -> {
                             val weight = SPECTRAL_WEIGHTS[i]
-                            val cleaned = ((rawTarget - 0.04f) / 0.96f).coerceIn(0f, 1f)
-                            (cleaned * weight * 0.84f).coerceIn(0f, 1f)
+                            (rawTarget * weight).coerceIn(0f, 1f)
                         }
                     }
 
-                    // 1. Balística assimétrica de subida ágil e descida amortecida
+                    // Balística assimétrica (Ataque rápido, Decaimento amortecido)
                     val current = currentLevels[i]
                     val alpha = if (target >= current) baseRiseAlpha else baseFallAlpha
                     currentLevels[i] = current + (target - current) * alpha
                     if (currentLevels[i] < 0.002f) currentLevels[i] = 0f
                     bandsOut[i] = currentLevels[i]
 
-                    // 2. Física dos picos flutuantes
+                    // Picos flutuantes independentes
                     val v = currentLevels[i]
                     if (v >= currentPeaks[i]) {
                         currentPeaks[i] = v
@@ -439,7 +414,7 @@ object AudioVisualizerManager {
                     bands = bandsOut,
                     peaks = peaksOut,
                     rms = rms,
-                    hasAudio = activeSignal || rms > 0.015f,
+                    hasAudio = activeSignal || rms > 0.008f,
                 )
             }
         }
@@ -452,49 +427,17 @@ object AudioVisualizerManager {
         readerJob = null
 
         try {
-            clientOut?.write('S'.code)
-            clientOut?.flush()
+            sendControlCommand('S')
         } catch (_: Throwable) {}
 
-        try { clientSocket?.close() } catch (_: Throwable) {}
-        clientSocket = null
-        clientOut = null
-
-        try { serverSocket?.close() } catch (_: Throwable) {}
-        serverSocket = null
-
-        val targetPid = daemonPid
-        daemonPid = -1
         val proc = daemonProcess
         daemonProcess = null
 
-        terminateProcessAndPid(proc, targetPid)
-    }
-
-    private fun terminateProcessAndPid(proc: Process?, pid: Int) {
         if (proc != null) {
-            val exited = runCatching {
-                var count = 0
-                while (count < 6) {
-                    if (!proc.isAlive) return@runCatching true
-                    Thread.sleep(50)
-                    count++
-                }
-                false
-            }.getOrDefault(false)
-
-            if (!exited) {
-                proc.destroy()
-                try { Thread.sleep(100) } catch (_: Throwable) {}
-                if (proc.isAlive) proc.destroyForcibly()
-            }
-        }
-
-        if (pid > 0) {
             try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "kill -TERM $pid || true")).waitFor()
-                Thread.sleep(80)
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "kill -0 $pid && kill -KILL $pid || true")).waitFor()
+                proc.destroy()
+                delay(80)
+                if (proc.isAlive) proc.destroyForcibly()
             } catch (_: Throwable) {}
         }
 
@@ -513,13 +456,15 @@ object AudioVisualizerManager {
             }
             targetFile.setReadable(true, false)
 
-            // Também assegura permissão e disponibilidade em /data/local/tmp caso SELinux restrinja o app_data_file
+            // Copia para /data/local/tmp garantindo leitura pelo processo root
             try {
-                val tmpFile = File("/data/local/tmp/visualizer_daemon.dex")
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "cp '${targetFile.absolutePath}' '${tmpFile.absolutePath}' && chmod 777 '${tmpFile.absolutePath}'")).waitFor()
-                if (tmpFile.exists() && tmpFile.canRead()) {
-                    return tmpFile.absolutePath
-                }
+                val tmpPath = "/data/local/tmp/visualizer_daemon.dex"
+                val p = Runtime.getRuntime().exec(arrayOf(
+                    "su", "-c",
+                    "cp '${targetFile.absolutePath}' '$tmpPath' && chmod 644 '$tmpPath'"
+                ))
+                p.waitFor()
+                return tmpPath
             } catch (_: Throwable) {}
 
             return targetFile.absolutePath
