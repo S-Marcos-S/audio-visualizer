@@ -44,4 +44,19 @@
     <string name="update_notification_channel_desc">Avisos sobre novas versões disponíveis do Audio Visualizer</string>
     <string name="update_notification_title">Audio Visualizer %1$s disponível</string>
     <string name="update_notification_text">Toque para ver o que há de novo e atualizar</string>
+
+    <!-- Papel de Parede Animado (Live Wallpaper) -->
+    <string name="wallpaper_service_label">Visualizador de Áudio (Live Wallpaper)</string>
+    <string name="wallpaper_service_desc">Espectro de áudio animado em tempo real na tela inicial, integrado com o seu papel de parede.</string>
+    <string name="wallpaper_card_title">Papel de Parede Animado (Home Screen)</string>
+    <string name="wallpaper_card_desc">Renderiza o visualizador atrás dos aplicativos e ícones da tela inicial, sobreposto ao seu papel de parede</string>
+    <string name="action_apply_wallpaper">Definir como Papel de Parede</string>
+    <string name="wallpaper_bg_title">Imagem de Fundo</string>
+    <string name="action_pick_image">Escolher da Galeria</string>
+    <string name="action_capture_system_wallpaper">Capturar do Sistema</string>
+    <string name="action_clear_custom_image">Restaurar Padrão</string>
+    <string name="wallpaper_vertical_pos_label">Posição Vertical na Tela</string>
+    <string name="wallpaper_height_label">Altura das Barras</string>
+    <string name="wallpaper_dim_label">Escurecimento do Fundo (Contraste)</string>
+    <string name="wallpaper_show_guides">Mostrar trilhas de fundo</string>
 </resources>

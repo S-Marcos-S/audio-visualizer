@@ -9,10 +9,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,12 +45,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -94,7 +99,9 @@ import dev.viagaralauncher.visualizer.update.DownloadStatus
 import dev.viagaralauncher.visualizer.update.RootInstaller
 import dev.viagaralauncher.visualizer.update.UpdateInfo
 import dev.viagaralauncher.visualizer.update.UpdateManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -213,6 +220,22 @@ fun MainScreen(
 
     var rootInfo by remember { mutableStateOf(RootInfo(RootStatus.CHECKING, "Verificando permissões de root...", "")) }
     var isCheckingRoot by remember { mutableStateOf(false) }
+    var hasCustomWallpaper by remember { mutableStateOf(WallpaperHelper.hasCustomWallpaper(context)) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val success = WallpaperHelper.saveCustomWallpaper(context, uri)
+                withContext(Dispatchers.Main) {
+                    hasCustomWallpaper = WallpaperHelper.hasCustomWallpaper(context)
+                    val msg = if (success) "Papel de parede personalizado aplicado!" else "Falha ao carregar imagem"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     fun refreshRoot() {
         isCheckingRoot = true
@@ -640,7 +663,292 @@ fun MainScreen(
             }
         }
 
-        // 5. Configurações de Widgets e Overlay
+        // 5. Papel de Parede Animado (Home Screen - Camada abaixo dos ícones)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Wallpaper,
+                        contentDescription = null,
+                        tint = settings.barColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.wallpaper_card_title),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color.White
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = stringResource(R.string.wallpaper_card_desc),
+                    fontSize = 12.sp,
+                    color = Color(0xFF888888),
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Botão Aplicar como Papel de Parede
+                Button(
+                    onClick = {
+                        WallpaperHelper.openLiveWallpaperChooser(context)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = settings.barColor,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Wallpaper,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.action_apply_wallpaper),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Fundo do Papel de Parede
+                Text(
+                    text = stringResource(R.string.wallpaper_bg_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xFF2E2E2E),
+                            contentColor = Color.White
+                        ),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Image,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = settings.barColor
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.action_pick_image),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                val success = WallpaperHelper.captureSystemWallpaper(context)
+                                withContext(Dispatchers.Main) {
+                                    hasCustomWallpaper = WallpaperHelper.hasCustomWallpaper(context)
+                                    val msg = if (success) "Wallpaper capturado do sistema!" else "Não foi possível capturar o wallpaper"
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xFF2E2E2E),
+                            contentColor = Color.White
+                        ),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.action_capture_system_wallpaper),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                if (hasCustomWallpaper) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            WallpaperHelper.removeCustomWallpaper(context)
+                            hasCustomWallpaper = false
+                            Toast.makeText(context, "Imagem customizada removida", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = Color(0xFF262626),
+                            contentColor = Color(0xFFFF5252)
+                        ),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.action_clear_custom_image),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Slider de Posição Vertical
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.wallpaper_vertical_pos_label),
+                        fontSize = 13.sp,
+                        color = Color(0xFFCCCCCC)
+                    )
+                    Text(
+                        text = "${(settings.wallpaperVerticalPosition * 100).roundToInt()}%",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = settings.barColor
+                    )
+                }
+
+                Slider(
+                    value = settings.wallpaperVerticalPosition,
+                    onValueChange = { prefs.setWallpaperVerticalPosition(it) },
+                    valueRange = 0.10f..0.95f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = settings.barColor,
+                        activeTrackColor = settings.barColor,
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Slider de Altura das Barras
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.wallpaper_height_label),
+                        fontSize = 13.sp,
+                        color = Color(0xFFCCCCCC)
+                    )
+                    Text(
+                        text = "${settings.wallpaperHeightDp} dp",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = settings.barColor
+                    )
+                }
+
+                Slider(
+                    value = settings.wallpaperHeightDp.toFloat(),
+                    onValueChange = { prefs.setWallpaperHeight(it.roundToInt()) },
+                    valueRange = 40f..240f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = settings.barColor,
+                        activeTrackColor = settings.barColor,
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Slider de Escurecimento (Dim / Contraste)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.wallpaper_dim_label),
+                        fontSize = 13.sp,
+                        color = Color(0xFFCCCCCC)
+                    )
+                    Text(
+                        text = "${(settings.wallpaperDim * 100).roundToInt()}%",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = settings.barColor
+                    )
+                }
+
+                Slider(
+                    value = settings.wallpaperDim,
+                    onValueChange = { prefs.setWallpaperDim(it) },
+                    valueRange = 0.00f..0.70f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = settings.barColor,
+                        activeTrackColor = settings.barColor,
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Switch de Mostrar Trilhas de Fundo
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.wallpaper_show_guides),
+                        fontSize = 13.sp,
+                        color = Color.White
+                    )
+
+                    Switch(
+                        checked = settings.wallpaperShowGuides,
+                        onCheckedChange = { prefs.setWallpaperShowGuides(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = settings.barColor,
+                            checkedTrackColor = settings.barColor.copy(alpha = 0.4f)
+                        )
+                    )
+                }
+            }
+        }
+
+        // 6. Configurações de Widgets e Overlay
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),

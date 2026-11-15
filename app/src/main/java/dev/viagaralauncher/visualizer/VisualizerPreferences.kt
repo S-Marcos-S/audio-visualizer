@@ -24,6 +24,10 @@ data class VisualizerSettings(
     val isFloatingEnabled: Boolean = false,
     val floatingHeightDp: Int = 90,
     val isFloatingAtBottom: Boolean = true,
+    val wallpaperDim: Float = 0.20f,
+    val wallpaperHeightDp: Int = 110,
+    val wallpaperVerticalPosition: Float = 0.82f,
+    val wallpaperShowGuides: Boolean = true,
 )
 
 class VisualizerPreferences(context: Context) {
@@ -56,6 +60,10 @@ class VisualizerPreferences(context: Context) {
         val isFloating = prefs.getBoolean(KEY_FLOATING_ENABLED, false)
         val floatingHeight = prefs.getInt(KEY_FLOATING_HEIGHT, 90)
         val floatingBottom = prefs.getBoolean(KEY_FLOATING_BOTTOM, true)
+        val wallpaperDim = prefs.getFloat(KEY_WALLPAPER_DIM, 0.20f)
+        val wallpaperHeight = prefs.getInt(KEY_WALLPAPER_HEIGHT, 110)
+        val wallpaperVerticalPosition = prefs.getFloat(KEY_WALLPAPER_VERTICAL_POS, 0.82f)
+        val wallpaperShowGuides = prefs.getBoolean(KEY_WALLPAPER_SHOW_GUIDES, true)
 
         return VisualizerSettings(
             speed = speed,
@@ -66,6 +74,10 @@ class VisualizerPreferences(context: Context) {
             isFloatingEnabled = isFloating,
             floatingHeightDp = floatingHeight,
             isFloatingAtBottom = floatingBottom,
+            wallpaperDim = wallpaperDim,
+            wallpaperHeightDp = wallpaperHeight,
+            wallpaperVerticalPosition = wallpaperVerticalPosition,
+            wallpaperShowGuides = wallpaperShowGuides,
         )
     }
 
@@ -108,6 +120,29 @@ class VisualizerPreferences(context: Context) {
         _settings.value = _settings.value.copy(isFloatingAtBottom = atBottom)
     }
 
+    fun setWallpaperDim(dim: Float) {
+        val clamped = dim.coerceIn(0.00f, 0.70f)
+        prefs.edit().putFloat(KEY_WALLPAPER_DIM, clamped).apply()
+        _settings.value = _settings.value.copy(wallpaperDim = clamped)
+    }
+
+    fun setWallpaperHeight(heightDp: Int) {
+        val clamped = heightDp.coerceIn(40, 260)
+        prefs.edit().putInt(KEY_WALLPAPER_HEIGHT, clamped).apply()
+        _settings.value = _settings.value.copy(wallpaperHeightDp = clamped)
+    }
+
+    fun setWallpaperVerticalPosition(position: Float) {
+        val clamped = position.coerceIn(0.10f, 0.95f)
+        prefs.edit().putFloat(KEY_WALLPAPER_VERTICAL_POS, clamped).apply()
+        _settings.value = _settings.value.copy(wallpaperVerticalPosition = clamped)
+    }
+
+    fun setWallpaperShowGuides(showGuides: Boolean) {
+        prefs.edit().putBoolean(KEY_WALLPAPER_SHOW_GUIDES, showGuides).apply()
+        _settings.value = _settings.value.copy(wallpaperShowGuides = showGuides)
+    }
+
     companion object {
         private const val PREFS_NAME = "audio_viz_settings"
         private const val KEY_SPEED = "viz_speed"
@@ -118,6 +153,10 @@ class VisualizerPreferences(context: Context) {
         private const val KEY_FLOATING_ENABLED = "viz_floating_enabled"
         private const val KEY_FLOATING_HEIGHT = "viz_floating_height"
         private const val KEY_FLOATING_BOTTOM = "viz_floating_bottom"
+        private const val KEY_WALLPAPER_DIM = "viz_wallpaper_dim"
+        private const val KEY_WALLPAPER_HEIGHT = "viz_wallpaper_height"
+        private const val KEY_WALLPAPER_VERTICAL_POS = "viz_wallpaper_vert_pos"
+        private const val KEY_WALLPAPER_SHOW_GUIDES = "viz_wallpaper_show_guides"
 
         val PRESETS = listOf(
             ColorPreset("Neon Cyan", Color(0xFF00E5FF), Color(0xFFFF4081)),

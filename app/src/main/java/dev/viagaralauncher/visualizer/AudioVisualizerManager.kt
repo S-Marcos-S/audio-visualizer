@@ -85,6 +85,8 @@ object AudioVisualizerManager {
     @Volatile
     private var isAppForeground = true
     @Volatile
+    private var isWallpaperVisible = false
+    @Volatile
     private var lastEnabledSetting = true
     @Volatile
     private var lastHasSession = false
@@ -116,12 +118,19 @@ object AudioVisualizerManager {
         scope.launch { evaluateStateAndAct() }
     }
 
+    fun onWallpaperVisibilityChanged(context: Context, visible: Boolean) {
+        appContext = context.applicationContext
+        isWallpaperVisible = visible
+        scope.launch { evaluateStateAndAct() }
+    }
+
     private suspend fun evaluateStateAndAct() {
         val effectivePlaying = isAlwaysOnMode || lastIsPlaying
         val effectiveSession = isAlwaysOnMode || lastHasSession
+        val isUiActive = isAppForeground || isWallpaperVisible
 
-        val shouldBeRunning = isAppForeground && lastEnabledSetting && effectiveSession && effectivePlaying
-        val isPausedSession = isAppForeground && lastEnabledSetting && effectiveSession && !effectivePlaying
+        val shouldBeRunning = isUiActive && lastEnabledSetting && effectiveSession && effectivePlaying
+        val isPausedSession = isUiActive && lastEnabledSetting && effectiveSession && !effectivePlaying
 
         if (shouldBeRunning) {
             stopJob?.cancel()
@@ -145,7 +154,7 @@ object AudioVisualizerManager {
         } else {
             stopJob?.cancel()
             stopJob = null
-            if (!isAppForeground && currentState == VisualizerState.RUNNING) {
+            if (!isUiActive && currentState == VisualizerState.RUNNING) {
                 pauseInternal()
             } else if (!lastEnabledSetting || !effectiveSession) {
                 stopInternal()

@@ -1,4 +1,5 @@
-### v0.1.4 - Ajuste de WindowInsets e Padding da Barra de Status
-- Suporte aprimorado a Edge-to-Edge no Android 15 com `enableEdgeToEdge`.
-- Inclusão de `statusBarsPadding` e `navigationBarsPadding` na tela principal.
-- Correção de sobreposição do cabeçalho do app pelo painel e barra de notificações.
+### v0.1.5 - Suporte a Live Wallpaper na Tela Inicial
+- Implementado `AudioVisualizerWallpaperService` para desenhar o visualizador atrás dos ícones na tela inicial.
+- Suporte a papel de parede do sistema e fotos personalizadas da galeria com Photo Picker.
+- Controles de personalização no app: posição vertical, altura das barras, escurecimento de contraste (dim) e trilhas.
+- Renderização acelerada por GPU a 60 FPS com suspensão automática de bateria (0% CPU ociosa).
