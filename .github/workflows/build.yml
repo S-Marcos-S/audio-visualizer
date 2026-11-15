@@ -74,7 +74,7 @@ jobs:
           D8_TOOL=$(ls -1d $ANDROID_HOME/build-tools/*/d8 | sort -V | tail -n 1)
           echo "Using Android Jar: $ANDROID_JAR"
           echo "Using D8 Tool: $D8_TOOL"
-          javac -source 17 -target 17 -cp "$ANDROID_JAR" -d build/daemon_classes app/src/main/java/dev/viagaralauncher/visualizer/AudioVisualizerDaemon.java
+          javac -source 17 -target 17 -cp "$ANDROID_JAR" -d build/daemon_classes app/src/daemon/dev/viagaralauncher/visualizer/AudioVisualizerDaemon.java
           $D8_TOOL build/daemon_classes/dev/viagaralauncher/visualizer/*.class --min-api 26 --output build/dex_output/
           cp build/dex_output/classes.dex app/src/main/assets/visualizer_daemon.dex
           ls -la app/src/main/assets/visualizer_daemon.dex

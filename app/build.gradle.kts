@@ -113,7 +113,7 @@ dependencies {
 
 tasks.register("compileDaemonDex") {
     description = "Compiles AudioVisualizerDaemon into visualizer_daemon.dex"
-    val javaSource = file("src/main/java/dev/viagaralauncher/visualizer/AudioVisualizerDaemon.java")
+    val javaSource = file("src/daemon/dev/viagaralauncher/visualizer/AudioVisualizerDaemon.java")
     val assetsDex = file("src/main/assets/visualizer_daemon.dex")
 
     inputs.file(javaSource)
