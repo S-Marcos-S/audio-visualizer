@@ -155,6 +155,7 @@ class FloatingVisualizerService : Service(), LifecycleOwner, ViewModelStoreOwner
     }
 
     override fun onDestroy() {
+        AudioVisualizerManager.onPause()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)

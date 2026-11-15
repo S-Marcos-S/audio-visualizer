@@ -3,6 +3,7 @@ package dev.viagaralauncher.visualizer
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -98,6 +100,8 @@ object AudioVisualizerManager {
     @Volatile
     private var appContext: Context? = null
     private var stopJob: Job? = null
+    @Volatile
+    private var resumeSignal: CompletableDeferred<Unit>? = null
 
     fun setSpeed(speed: Float) {
         currentSpeed = speed.coerceIn(0.10f, 1.00f)
@@ -152,11 +156,22 @@ object AudioVisualizerManager {
                 }
             }
         } else {
-            stopJob?.cancel()
-            stopJob = null
-            if (!isUiActive && currentState == VisualizerState.RUNNING) {
-                pauseInternal()
+            if (!isUiActive) {
+                if (currentState == VisualizerState.RUNNING) {
+                    pauseInternal()
+                }
+                // Se a UI não está ativa (app em segundo plano ou tela desligada),
+                // agenda parada total do processo daemon após 15 segundos para zerar 100% o consumo de bateria
+                if (currentState != VisualizerState.STOPPED && stopJob == null) {
+                    stopJob = scope.launch {
+                        delay(15_000L)
+                        stopInternal()
+                        stopJob = null
+                    }
+                }
             } else if (!lastEnabledSetting || !effectiveSession) {
+                stopJob?.cancel()
+                stopJob = null
                 stopInternal()
             }
         }
@@ -166,6 +181,9 @@ object AudioVisualizerManager {
         lifecycleMutex.withLock {
             if (currentState == VisualizerState.RUNNING) {
                 currentState = VisualizerState.PAUSED
+                if (resumeSignal == null || resumeSignal?.isCompleted == true) {
+                    resumeSignal = CompletableDeferred()
+                }
                 sendControlCommand('P')
                 withContext(Dispatchers.Default) {
                     currentLevels.fill(0f)
@@ -181,6 +199,8 @@ object AudioVisualizerManager {
             if (currentState == VisualizerState.PAUSED) {
                 currentState = VisualizerState.RUNNING
                 sendControlCommand('R')
+                resumeSignal?.complete(Unit)
+                resumeSignal = null
             }
         }
     }
@@ -205,6 +225,9 @@ object AudioVisualizerManager {
 
             supervisorJob?.cancel()
             supervisorJob = null
+
+            resumeSignal?.cancel()
+            resumeSignal = null
 
             cleanupDaemonLocked(gen)
 
@@ -330,6 +353,7 @@ object AudioVisualizerManager {
     private fun startReaderLoop(inputStream: InputStream) {
         readerJob?.cancel()
         readerJob = scope.launch(Dispatchers.IO) {
+            val bufferedIn = BufferedInputStream(inputStream, 16384)
             val packetSize = 4 + 1 + 4 + (NUM_BANDS * 4) // 65 bytes
             val payloadSize = packetSize - 4 // 61 bytes após o cabeçalho 'V','I','Z','1'
             val payloadBuffer = ByteArray(payloadSize)
@@ -338,20 +362,29 @@ object AudioVisualizerManager {
 
             while (isActive && (currentState == VisualizerState.RUNNING || currentState == VisualizerState.PAUSED)) {
                 if (currentState == VisualizerState.PAUSED) {
-                    delay(100)
+                    val signal = resumeSignal
+                    if (signal != null) {
+                        try {
+                            signal.await()
+                        } catch (_: Throwable) {
+                            break
+                        }
+                    } else {
+                        delay(100)
+                    }
                     continue
                 }
 
                 // 1. Sincronização estrita de frame com o cabeçalho 'V', 'I', 'Z', '1'
-                var b = inputStream.read()
+                var b = bufferedIn.read()
                 while (b != -1 && b.toByte() != 'V'.code.toByte() && isActive) {
-                    b = inputStream.read()
+                    b = bufferedIn.read()
                 }
                 if (b == -1 || !isActive) break
 
-                val b2 = inputStream.read()
-                val b3 = inputStream.read()
-                val b4 = inputStream.read()
+                val b2 = bufferedIn.read()
+                val b3 = bufferedIn.read()
+                val b4 = bufferedIn.read()
                 if (b2 != 'I'.code || b3 != 'Z'.code || b4 != '1'.code) {
                     continue
                 }
@@ -359,11 +392,17 @@ object AudioVisualizerManager {
                 // 2. Leitura dos 61 bytes restantes do pacote
                 var totalRead = 0
                 while (totalRead < payloadSize && isActive) {
-                    val read = inputStream.read(payloadBuffer, totalRead, payloadSize - totalRead)
+                    val read = bufferedIn.read(payloadBuffer, totalRead, payloadSize - totalRead)
                     if (read == -1) break
                     totalRead += read
                 }
                 if (totalRead < payloadSize || !isActive) break
+
+                // Se houver pacotes mais novos acumulados no buffer do pipe (atraso acumulado),
+                // continua consumindo para publicar apenas o quadro mais recente em tempo real
+                if (bufferedIn.available() >= packetSize) {
+                    continue
+                }
 
                 // 3. Decodificação dos campos binários Little-Endian
                 byteBuffer.position(0)
@@ -383,9 +422,11 @@ object AudioVisualizerManager {
                 val normSpeed = ((currentSpeed - 0.10f) / 0.90f).coerceIn(0f, 1f)
                 val speedCurve = normSpeed.pow(1.4f)
 
-                val baseRiseAlpha = (0.045f + 0.455f * speedCurve).coerceIn(0.035f, 0.60f)
-                val baseFallAlpha = (0.010f + 0.150f * speedCurve).coerceIn(0.008f, 0.20f)
-                val peakFallAlpha = (0.0018f + 0.012f * speedCurve).coerceIn(0.0015f, 0.018f)
+                // Ataque instantâneo e responsivo aos transientes sonoros (sem delay)
+                val baseRiseAlpha = (0.72f + 0.26f * speedCurve).coerceIn(0.68f, 0.98f)
+                // Decaimento suave com amortecimento físico perfeito para batidas musicais
+                val baseFallAlpha = (0.12f + 0.24f * speedCurve).coerceIn(0.10f, 0.38f)
+                val peakFallAlpha = (0.015f + 0.035f * speedCurve).coerceIn(0.012f, 0.050f)
 
                 for (i in 0 until NUM_BANDS) {
                     val rawTarget = incomingBands[i].coerceIn(0f, 1f)

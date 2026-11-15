@@ -209,7 +209,6 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val settings by prefs.settings.collectAsState()
-    val frame by AudioVisualizerManager.frameFlow.collectAsState()
     val scope = rememberCoroutineScope()
 
     val updateInfo by UpdateManager.updateAvailable.collectAsState()
@@ -321,20 +320,7 @@ fun MainScreen(
                         letterSpacing = 1.sp
                     )
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300))
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (frame.hasAudio) "60 FPS • Áudio Ativo" else "Aguardando Som",
-                            fontSize = 11.sp,
-                            color = if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300)
-                        )
-                    }
+                    AudioStatusIndicator()
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -367,12 +353,7 @@ fun MainScreen(
                         fontSize = 11.sp,
                         color = Color(0xFF666666)
                     )
-                    Text(
-                        text = "RMS: ${(frame.rms * 100).roundToInt()}%",
-                        fontSize = 11.sp,
-                        color = settings.barColor,
-                        fontWeight = FontWeight.Medium
-                    )
+                    RmsMeterText(color = settings.barColor)
                 }
             }
         }
@@ -1589,4 +1570,34 @@ private fun AnnotatedString.Builder.parseInlineMarkdown(line: String) {
     if (lastIndex < line.length) {
         append(line.substring(lastIndex))
     }
+}
+
+@Composable
+private fun AudioStatusIndicator() {
+    val frame by AudioVisualizerManager.frameFlow.collectAsState()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300))
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = if (frame.hasAudio) "60 FPS • Áudio Ativo" else "Aguardando Som",
+            fontSize = 11.sp,
+            color = if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300)
+        )
+    }
+}
+
+@Composable
+private fun RmsMeterText(color: Color) {
+    val frame by AudioVisualizerManager.frameFlow.collectAsState()
+    Text(
+        text = "RMS: ${(frame.rms * 100).roundToInt()}%",
+        fontSize = 11.sp,
+        color = color,
+        fontWeight = FontWeight.Medium
+    )
 }

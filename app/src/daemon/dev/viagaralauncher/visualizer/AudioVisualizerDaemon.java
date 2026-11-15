@@ -103,9 +103,7 @@ public final class AudioVisualizerDaemon {
         }
 
         float uniformGain = 1.40f;
-        float[] emaBands = new float[NUM_BANDS];
         byte[] fftBuffer = new byte[CAPTURE_SIZE];
-        byte[] waveBuffer = new byte[CAPTURE_SIZE];
         float[] magnitudes = new float[NUM_BANDS];
 
         ByteBuffer packetBuffer = ByteBuffer.allocate(4 + 1 + 4 + (NUM_BANDS * 4));
@@ -146,36 +144,39 @@ public final class AudioVisualizerDaemon {
                 }
 
                 if (isPaused) {
-                    Thread.sleep(50);
+                    try {
+                        int cmd = System.in.read();
+                        if (cmd == -1 || cmd == 'S' || cmd == 'Q') {
+                            System.err.println("VIZ_DAEMON: Comando de parada recebido via stdin durante pausa.");
+                            return;
+                        } else if (cmd == 'R') {
+                            isPaused = false;
+                            try { visualizer.setEnabled(true); } catch (Throwable ignored) {}
+                        }
+                    } catch (Throwable t) {
+                        System.err.println("VIZ_DAEMON: Erro na leitura stdin durante pausa: " + t.getMessage());
+                        return;
+                    }
                     continue;
                 }
 
                 long loopStartTime = System.currentTimeMillis();
 
                 int fftResult = visualizer.getFft(fftBuffer);
-                int waveResult = visualizer.getWaveForm(waveBuffer);
                 float rms = 0f;
 
                 if (fftResult == Visualizer.SUCCESS) {
                     float totalLevelSum = 0f;
                     for (int b = 0; b < NUM_BANDS; b++) {
                         float rawRms = computeBandRms(fftBuffer, bandStartBins[b], bandEndBins[b]);
-                        emaBands[b] = emaBands[b] * 0.65f + rawRms * 0.35f;
-                        float level = Math.min(1.0f, emaBands[b] * uniformGain);
+                        float level = Math.min(1.0f, rawRms * uniformGain);
                         magnitudes[b] = level;
                         totalLevelSum += level;
                     }
-
-                    rms = (waveResult == Visualizer.SUCCESS)
-                        ? computeWaveRms(waveBuffer)
-                        : Math.max(0f, Math.min(1f, totalLevelSum / NUM_BANDS));
+                    rms = Math.max(0f, Math.min(1f, totalLevelSum / NUM_BANDS));
                 } else {
                     for (int b = 0; b < NUM_BANDS; b++) {
                         magnitudes[b] = 0f;
-                        emaBands[b] = 0f;
-                    }
-                    if (waveResult == Visualizer.SUCCESS) {
-                        rms = computeWaveRms(waveBuffer);
                     }
                 }
 
