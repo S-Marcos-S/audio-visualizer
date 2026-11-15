@@ -22,12 +22,17 @@ public final class AudioVisualizerDaemon {
     private static final String SOCKET_NAME = "viagara_audio_viz";
     private static final int CAPTURE_SIZE = 1024;
     private static final int NUM_BANDS = 14;
-    private static final long FRAME_INTERVAL_MS = 16L; // ~60 FPS
+    private static final long FRAME_INTERVAL_MS = 8L; // ~120 FPS
 
     private AudioVisualizerDaemon() {}
 
     public static void main(String[] args) {
         System.err.println("VIZ_DAEMON: Iniciando daemon (UID=" + android.os.Process.myUid() + ", PID=" + android.os.Process.myPid() + ")");
+
+        // 0. Eleva prioridade da thread para áudio urgente (elimina timer slack do kernel e throttling de CPU sem toques)
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+        } catch (Throwable ignored) {}
 
         // 1. Inicializa Looper para dar suporte a chamadas de Handler e AudioEffect
         try {
@@ -103,7 +108,9 @@ public final class AudioVisualizerDaemon {
         }
 
         float uniformGain = 1.40f;
+        float[] emaBands = new float[NUM_BANDS];
         byte[] fftBuffer = new byte[CAPTURE_SIZE];
+        byte[] waveBuffer = new byte[CAPTURE_SIZE];
         float[] magnitudes = new float[NUM_BANDS];
 
         ByteBuffer packetBuffer = ByteBuffer.allocate(4 + 1 + 4 + (NUM_BANDS * 4));
@@ -163,20 +170,29 @@ public final class AudioVisualizerDaemon {
                 long loopStartTime = System.currentTimeMillis();
 
                 int fftResult = visualizer.getFft(fftBuffer);
+                int waveResult = visualizer.getWaveForm(waveBuffer);
                 float rms = 0f;
 
                 if (fftResult == Visualizer.SUCCESS) {
                     float totalLevelSum = 0f;
                     for (int b = 0; b < NUM_BANDS; b++) {
                         float rawRms = computeBandRms(fftBuffer, bandStartBins[b], bandEndBins[b]);
-                        float level = Math.min(1.0f, rawRms * uniformGain);
+                        emaBands[b] = emaBands[b] * 0.65f + rawRms * 0.35f;
+                        float level = Math.min(1.0f, emaBands[b] * uniformGain);
                         magnitudes[b] = level;
                         totalLevelSum += level;
                     }
-                    rms = Math.max(0f, Math.min(1f, totalLevelSum / NUM_BANDS));
+
+                    rms = (waveResult == Visualizer.SUCCESS)
+                        ? computeWaveRms(waveBuffer)
+                        : Math.max(0f, Math.min(1f, totalLevelSum / NUM_BANDS));
                 } else {
                     for (int b = 0; b < NUM_BANDS; b++) {
                         magnitudes[b] = 0f;
+                        emaBands[b] = 0f;
+                    }
+                    if (waveResult == Visualizer.SUCCESS) {
+                        rms = computeWaveRms(waveBuffer);
                     }
                 }
 

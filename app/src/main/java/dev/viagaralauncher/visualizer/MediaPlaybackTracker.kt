@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 class MediaPlaybackTracker(private val context: Context) {
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val prefs = VisualizerPreferences(context)
     private val scope = CoroutineScope(Dispatchers.Default + Job())
     private var pollingJob: Job? = null
 
@@ -21,9 +22,10 @@ class MediaPlaybackTracker(private val context: Context) {
         pollingJob = scope.launch {
             while (isActive) {
                 val isPlaying = audioManager.isMusicActive
+                val isEnabled = prefs.settings.value.isEnabled
                 AudioVisualizerManager.updatePlaybackState(
                     context = context,
-                    enabled = true,
+                    enabled = isEnabled,
                     isPlaying = isPlaying,
                     hasSession = true
                 )

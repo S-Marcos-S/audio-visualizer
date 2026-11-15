@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package dev.viagaralauncher.visualizer
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
@@ -9,9 +10,11 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Build
+import android.os.PowerManager
 import android.service.wallpaper.WallpaperService
 import android.util.Log
 import android.view.Choreographer
+import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +46,14 @@ class AudioVisualizerWallpaperService : WallpaperService() {
         return VisualizerEngine()
     }
 
+    private fun updateGlobalWallpaperVisibility() {
+        val anyVisible = activeEngines.any { it.isEngineVisible }
+        AudioVisualizerManager.onWallpaperVisibilityChanged(
+            this@AudioVisualizerWallpaperService,
+            anyVisible
+        )
+    }
+
     inner class VisualizerEngine : Engine(), Choreographer.FrameCallback {
 
         private val engineScope = CoroutineScope(Dispatchers.Default + Job())
@@ -57,8 +68,16 @@ class AudioVisualizerWallpaperService : WallpaperService() {
 
         private var surfaceWidth = 0
         private var surfaceHeight = 0
-        private var isEngineVisible = false
+        @Volatile
+        internal var isEngineVisible = false
         private var isFrameCallbackScheduled = false
+
+        private val powerManager by lazy { getSystemService(Context.POWER_SERVICE) as? PowerManager }
+        private var wakeLock: PowerManager.WakeLock? = null
+        private var isFrameRateVoted = false
+
+        private val animatedBands = FloatArray(14)
+        private val animatedPeaks = FloatArray(14)
 
         private var lastFrameTimeNanos: Long = 0L
         private var activeAlphaAnim: Float = 0f
@@ -90,6 +109,13 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             super.onCreate(surfaceHolder)
             activeEngines.add(this)
 
+            wakeLock = powerManager?.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "AudioVisualizer:WallpaperRenderLock"
+            )?.apply {
+                setReferenceCounted(false)
+            }
+
             // Observa configurações continuamente
             engineScope.launch {
                 prefs.settings.collectLatest { newSettings ->
@@ -103,7 +129,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             // Observa frames de áudio para acordar o renderizador
             engineScope.launch {
                 AudioVisualizerManager.frameFlow.collectLatest { frame ->
-                    if (frame.hasAudio && isEngineVisible && !isFrameCallbackScheduled) {
+                    if (frame.hasAudio && settings.isEnabled && isEngineVisible && !isFrameCallbackScheduled) {
                         withContext(Dispatchers.Main) {
                             scheduleNextFrame()
                         }
@@ -115,8 +141,11 @@ class AudioVisualizerWallpaperService : WallpaperService() {
         override fun onDestroy() {
             super.onDestroy()
             activeEngines.remove(this)
+            isEngineVisible = false
+            updateGlobalWallpaperVisibility()
+            updateWakeLock(false)
+            updateSurfaceFrameRate(false)
             playbackTracker.stopTracking()
-            AudioVisualizerManager.onWallpaperVisibilityChanged(this@AudioVisualizerWallpaperService, false)
             removeFrameCallback()
             engineScope.cancel()
 
@@ -127,7 +156,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             super.onVisibilityChanged(visible)
             isEngineVisible = visible
-            AudioVisualizerManager.onWallpaperVisibilityChanged(this@AudioVisualizerWallpaperService, visible)
+            updateGlobalWallpaperVisibility()
 
             if (visible) {
                 // Atualiza configurações mais recentes
@@ -144,8 +173,12 @@ class AudioVisualizerWallpaperService : WallpaperService() {
 
                 // Força render imediato do estado atual
                 forceRenderCurrentFrame()
-                scheduleNextFrame()
+                if (settings.isEnabled) {
+                    scheduleNextFrame()
+                }
             } else {
+                updateWakeLock(false)
+                updateSurfaceFrameRate(false)
                 playbackTracker.stopTracking()
                 removeFrameCallback()
             }
@@ -177,6 +210,8 @@ class AudioVisualizerWallpaperService : WallpaperService() {
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             super.onSurfaceDestroyed(holder)
+            updateWakeLock(false)
+            updateSurfaceFrameRate(false)
             removeFrameCallback()
         }
 
@@ -238,14 +273,100 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             }
         }
 
+        private fun updateWakeLock(isAnimating: Boolean) {
+            try {
+                if (isAnimating) {
+                    if (wakeLock?.isHeld == false) {
+                        wakeLock?.acquire(10_000L)
+                    }
+                } else {
+                    if (wakeLock?.isHeld == true) {
+                        wakeLock?.release()
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        private fun updateSurfaceFrameRate(isAnimating: Boolean) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+            val surface = surfaceHolder?.surface ?: return
+            if (!surface.isValid) return
+
+            try {
+                if (isAnimating) {
+                    if (!isFrameRateVoted) {
+                        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            display
+                        } else {
+                            @Suppress("DEPRECATION")
+                            (getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+                        }
+                        val maxRefreshRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: 120f
+                        } else {
+                            @Suppress("DEPRECATION")
+                            display?.refreshRate ?: 120f
+                        }
+                        val targetRate = maxOf(60f, maxRefreshRate)
+
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            surface.setFrameRate(
+                                targetRate,
+                                Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                                Surface.CHANGE_FRAME_RATE_ALWAYS
+                            )
+                        } else {
+                            surface.setFrameRate(
+                                targetRate,
+                                Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
+                            )
+                        }
+                        isFrameRateVoted = true
+                    }
+                } else {
+                    if (isFrameRateVoted) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            surface.setFrameRate(
+                                0f,
+                                Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                                Surface.CHANGE_FRAME_RATE_ALWAYS
+                            )
+                        } else {
+                            surface.setFrameRate(
+                                0f,
+                                Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
+                            )
+                        }
+                        isFrameRateVoted = false
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Falha ao definir frame rate da surface: ${t.message}")
+            }
+        }
+
         override fun doFrame(frameTimeNanos: Long) {
             isFrameCallbackScheduled = false
-            if (!isEngineVisible) return
+            if (!isEngineVisible) {
+                updateWakeLock(false)
+                updateSurfaceFrameRate(false)
+                return
+            }
+
+            if (!settings.isEnabled) {
+                if (activeAlphaAnim > 0f) {
+                    activeAlphaAnim = 0f
+                    forceRenderCurrentFrame()
+                }
+                updateWakeLock(false)
+                updateSurfaceFrameRate(false)
+                return
+            }
 
             val dtSeconds = if (lastFrameTimeNanos > 0L) {
-                ((frameTimeNanos - lastFrameTimeNanos) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
+                ((frameTimeNanos - lastFrameTimeNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
             } else {
-                0.016f
+                0.008f
             }
             lastFrameTimeNanos = frameTimeNanos
 
@@ -260,21 +381,48 @@ class AudioVisualizerWallpaperService : WallpaperService() {
                 activeAlphaAnim = (activeAlphaAnim - fadeSpeed * dtSeconds).coerceAtLeast(0f)
             }
 
-            renderCurrentFrame(frame)
+            // Suavização contínua por delta time baseada no frame rate real do display
+            val speedFactor = settings.speed.coerceIn(0.10f, 1.00f)
+            val riseFactor = (1f - Math.exp((-28.0 * speedFactor * dtSeconds)).toFloat()).coerceIn(0.05f, 1f)
+            val fallFactor = (1f - Math.exp((-14.0 * speedFactor * dtSeconds)).toFloat()).coerceIn(0.02f, 1f)
+            val peakDecay = 0.50f * dtSeconds
+
+            val numBands = minOf(frame.bands.size, animatedBands.size)
+            for (i in 0 until numBands) {
+                val target = frame.bands[i]
+                val current = animatedBands[i]
+                val factor = if (target >= current) riseFactor else fallFactor
+                animatedBands[i] = current + (target - current) * factor
+                if (animatedBands[i] < 0.001f) animatedBands[i] = 0f
+
+                val v = animatedBands[i]
+                if (v >= animatedPeaks[i]) {
+                    animatedPeaks[i] = v
+                } else {
+                    animatedPeaks[i] = (animatedPeaks[i] - peakDecay).coerceAtLeast(v)
+                }
+            }
+
+            val isAnimating = (activeAlphaAnim > 0.001f || frame.hasAudio)
+            updateWakeLock(isAnimating)
+            updateSurfaceFrameRate(isAnimating)
+
+            renderCurrentFrame(animatedBands, animatedPeaks)
 
             // Continua o loop enquanto houver áudio ou a animação de fade não tiver chegado a 0
-            if (activeAlphaAnim > 0.001f || frame.hasAudio) {
+            if (isAnimating) {
                 scheduleNextFrame()
             }
         }
 
         private fun forceRenderCurrentFrame() {
             if (!isEngineVisible) return
-            val frame = AudioVisualizerManager.frameFlow.value
-            renderCurrentFrame(frame)
+            val bands = if (settings.isEnabled) animatedBands else FloatArray(14)
+            val peaks = if (settings.isEnabled) animatedPeaks else FloatArray(14)
+            renderCurrentFrame(bands, peaks)
         }
 
-        private fun renderCurrentFrame(frame: VisualizerFrame) {
+        private fun renderCurrentFrame(bands: FloatArray, peaks: FloatArray) {
             val holder = surfaceHolder ?: return
             if (surfaceWidth <= 0 || surfaceHeight <= 0) return
 
@@ -291,7 +439,7 @@ class AudioVisualizerWallpaperService : WallpaperService() {
 
             try {
                 drawBackground(canvas)
-                drawVisualizerBars(canvas, frame)
+                drawVisualizerBars(canvas, bands, peaks)
             } finally {
                 try {
                     holder.unlockCanvasAndPost(canvas)
@@ -333,10 +481,8 @@ class AudioVisualizerWallpaperService : WallpaperService() {
             }
         }
 
-        private fun drawVisualizerBars(canvas: Canvas, frame: VisualizerFrame) {
-            val bands = frame.bands
-            val peaks = frame.peaks
-            val strips = bands.size
+        private fun drawVisualizerBars(canvas: Canvas, bands: FloatArray, peaks: FloatArray) {
+            val strips = minOf(bands.size, peaks.size)
             if (strips == 0) return
 
             val w = surfaceWidth.toFloat()

@@ -1,6 +1,8 @@
-### v0.1.8 - Otimização de Performance, Eliminação de Lag e Redução de Bateria
-- **Eliminação de Lag em Tempo Real:** Remoção de latência acumulada no pipe via `BufferedInputStream` com descarte inteligente de pacotes defasados, garantindo sincronia perfeita com a música.
-- **Balística Física Instantânea:** Ataque ultrarrápido (subida das barras em 1-2 frames) e decaimento dinâmico suave perfeitamente calibrado para o ritmo musical.
-- **Eficiência do Daemon Root:** Transmissão instantânea do espectro RMS de Parseval sem filtro EMA artificial atrasado e eliminação de IPCs síncronos redundantes no AudioFlinger.
-- **Bateria 0% em Segundo Plano:** O daemon bloqueia nativamente no kernel Linux (`TASK_INTERRUPTIBLE`) sem loops de espera ativa, e o processo root é encerrado após 15 segundos sem uso da interface ou de tela desligada.
-- **Fim dos Engasgos no App:** Isolamento das recomposições do Jetpack Compose na tela principal, eliminando acúmulo de objetos e pausas de Garbage Collection (GC) durante a reprodução.
+### v0.1.9 - Fluidez Extrema em Telas LTPO (120Hz), Botão Ligar/Desligar e UI Minimalista
+- **Eliminação de Lag em Telas LTPO (120Hz):** Votação explícita de taxa de atualização para a Surface via `Surface.setFrameRate(maxRate, ALWAYS)` e controle inteligente de `PARTIAL_WAKE_LOCK` durante animação ativa. Impede que a tela caia para 10Hz/30Hz ou que o escalonador entre em economia profunda quando o usuário para de tocar na tela inicial.
+- **Suavização Contínua Baseada em Delta Time:** Interpolação física no motor do Live Wallpaper calculada por delta time (`dtSeconds`) a cada pulso de VSYNC, garantindo fluidez contínua e sem jitter em 60Hz, 90Hz, 120Hz ou 144Hz.
+- **Taxa de Captura a 120 FPS no Daemon:** Intervalo de amostragem reduzido para 8ms com prioridade `THREAD_PRIORITY_URGENT_AUDIO`, fornecendo fluxo contínuo de pacotes em tempo real.
+- **Botão Ligar / Desligar Minimalista:** Novo controle liga/desliga no topo do aplicativo para pausar instantaneamente todo o processamento de áudio com 0% de CPU e bateria.
+- **Status Root Minimalista no Rodapé:** A seção de permissão root foi movida para o final da tela em formato compacto, limpo e discreto.
+- **Correção da Transição Tela de Bloqueio -> Tela Inicial:** Rastreamento unificado de múltiplos motores no Live Wallpaper (`activeEngines.any`), impedindo que o encerramento da tela de bloqueio desligue o visualizador na tela inicial.
+- **Bateria 0% em Segundo Plano:** O daemon suspende nativamente no kernel Linux (`TASK_INTERRUPTIBLE`) sem consumo de CPU, e o processo root é encerrado após 15 segundos sem uso da interface ou de tela desligada.

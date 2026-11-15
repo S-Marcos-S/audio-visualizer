@@ -16,6 +16,7 @@ data class ColorPreset(
 )
 
 data class VisualizerSettings(
+    val isEnabled: Boolean = true,
     val speed: Float = 0.50f,
     val barColor: Color = Color(0xFF00E5FF),
     val peakColor: Color = Color(0xFFFF4081),
@@ -61,6 +62,7 @@ class VisualizerPreferences(context: Context) {
     }
 
     fun loadSettings(): VisualizerSettings {
+        val isEnabled = prefs.getBoolean(KEY_ENABLED, true)
         val speed = prefs.getFloat(KEY_SPEED, 0.50f)
         val barColor = getStoredColor(KEY_BAR_COLOR, Color(0xFF00E5FF))
         val peakColor = getStoredColor(KEY_PEAK_COLOR, Color(0xFFFF4081))
@@ -75,6 +77,7 @@ class VisualizerPreferences(context: Context) {
         val wallpaperShowGuides = prefs.getBoolean(KEY_WALLPAPER_SHOW_GUIDES, true)
 
         return VisualizerSettings(
+            isEnabled = isEnabled,
             speed = speed,
             barColor = barColor,
             peakColor = peakColor,
@@ -88,6 +91,13 @@ class VisualizerPreferences(context: Context) {
             wallpaperVerticalPosition = wallpaperVerticalPosition,
             wallpaperShowGuides = wallpaperShowGuides,
         )
+    }
+
+    fun setEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_ENABLED, enabled).apply()
+        updateSettings { it.copy(isEnabled = enabled) }
+        AudioVisualizerManager.setEnabled(enabled)
+        AudioVisualizerWallpaperService.reloadSettings()
     }
 
     fun setSpeed(speed: Float) {
@@ -166,6 +176,7 @@ class VisualizerPreferences(context: Context) {
 
     companion object {
         private const val PREFS_NAME = "audio_viz_settings"
+        private const val KEY_ENABLED = "viz_master_enabled"
         private const val KEY_SPEED = "viz_speed"
         private const val KEY_BAR_COLOR = "viz_bar_color"
         private const val KEY_PEAK_COLOR = "viz_peak_color"

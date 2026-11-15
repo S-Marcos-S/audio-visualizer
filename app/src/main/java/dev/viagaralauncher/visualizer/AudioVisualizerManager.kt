@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -91,6 +90,8 @@ object AudioVisualizerManager {
     @Volatile
     private var lastEnabledSetting = true
     @Volatile
+    private var isMasterEnabled = true
+    @Volatile
     private var lastHasSession = false
     @Volatile
     private var lastIsPlaying = false
@@ -109,6 +110,15 @@ object AudioVisualizerManager {
 
     fun getSpeed(): Float = currentSpeed
 
+    fun setEnabled(enabled: Boolean) {
+        isMasterEnabled = enabled
+        lastEnabledSetting = enabled
+        if (!enabled) {
+            _frameFlow.value = VisualizerFrame()
+        }
+        scope.launch { evaluateStateAndAct() }
+    }
+
     fun setAlwaysOn(alwaysOn: Boolean) {
         isAlwaysOnMode = alwaysOn
         scope.launch { evaluateStateAndAct() }
@@ -116,7 +126,7 @@ object AudioVisualizerManager {
 
     fun updatePlaybackState(context: Context, enabled: Boolean, isPlaying: Boolean, hasSession: Boolean) {
         appContext = context.applicationContext
-        lastEnabledSetting = enabled
+        lastEnabledSetting = enabled && isMasterEnabled
         lastHasSession = hasSession
         lastIsPlaying = isPlaying
         scope.launch { evaluateStateAndAct() }
@@ -133,8 +143,8 @@ object AudioVisualizerManager {
         val effectiveSession = isAlwaysOnMode || lastHasSession
         val isUiActive = isAppForeground || isWallpaperVisible
 
-        val shouldBeRunning = isUiActive && lastEnabledSetting && effectiveSession && effectivePlaying
-        val isPausedSession = isUiActive && lastEnabledSetting && effectiveSession && !effectivePlaying
+        val shouldBeRunning = isMasterEnabled && isUiActive && lastEnabledSetting && effectiveSession && effectivePlaying
+        val isPausedSession = isMasterEnabled && isUiActive && lastEnabledSetting && effectiveSession && !effectivePlaying
 
         if (shouldBeRunning) {
             stopJob?.cancel()
@@ -156,7 +166,12 @@ object AudioVisualizerManager {
                 }
             }
         } else {
-            if (!isUiActive) {
+            if (!isMasterEnabled || !lastEnabledSetting || !effectiveSession) {
+                stopJob?.cancel()
+                stopJob = null
+                stopInternal()
+                _frameFlow.value = VisualizerFrame()
+            } else if (!isUiActive) {
                 if (currentState == VisualizerState.RUNNING) {
                     pauseInternal()
                 }
@@ -169,10 +184,6 @@ object AudioVisualizerManager {
                         stopJob = null
                     }
                 }
-            } else if (!lastEnabledSetting || !effectiveSession) {
-                stopJob?.cancel()
-                stopJob = null
-                stopInternal()
             }
         }
     }
@@ -353,7 +364,9 @@ object AudioVisualizerManager {
     private fun startReaderLoop(inputStream: InputStream) {
         readerJob?.cancel()
         readerJob = scope.launch(Dispatchers.IO) {
-            val bufferedIn = BufferedInputStream(inputStream, 16384)
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY)
+            } catch (_: Throwable) {}
             val packetSize = 4 + 1 + 4 + (NUM_BANDS * 4) // 65 bytes
             val payloadSize = packetSize - 4 // 61 bytes após o cabeçalho 'V','I','Z','1'
             val payloadBuffer = ByteArray(payloadSize)
@@ -376,15 +389,15 @@ object AudioVisualizerManager {
                 }
 
                 // 1. Sincronização estrita de frame com o cabeçalho 'V', 'I', 'Z', '1'
-                var b = bufferedIn.read()
+                var b = inputStream.read()
                 while (b != -1 && b.toByte() != 'V'.code.toByte() && isActive) {
-                    b = bufferedIn.read()
+                    b = inputStream.read()
                 }
                 if (b == -1 || !isActive) break
 
-                val b2 = bufferedIn.read()
-                val b3 = bufferedIn.read()
-                val b4 = bufferedIn.read()
+                val b2 = inputStream.read()
+                val b3 = inputStream.read()
+                val b4 = inputStream.read()
                 if (b2 != 'I'.code || b3 != 'Z'.code || b4 != '1'.code) {
                     continue
                 }
@@ -392,17 +405,11 @@ object AudioVisualizerManager {
                 // 2. Leitura dos 61 bytes restantes do pacote
                 var totalRead = 0
                 while (totalRead < payloadSize && isActive) {
-                    val read = bufferedIn.read(payloadBuffer, totalRead, payloadSize - totalRead)
+                    val read = inputStream.read(payloadBuffer, totalRead, payloadSize - totalRead)
                     if (read == -1) break
                     totalRead += read
                 }
                 if (totalRead < payloadSize || !isActive) break
-
-                // Se houver pacotes mais novos acumulados no buffer do pipe (atraso acumulado),
-                // continua consumindo para publicar apenas o quadro mais recente em tempo real
-                if (bufferedIn.available() >= packetSize) {
-                    continue
-                }
 
                 // 3. Decodificação dos campos binários Little-Endian
                 byteBuffer.position(0)
@@ -422,11 +429,9 @@ object AudioVisualizerManager {
                 val normSpeed = ((currentSpeed - 0.10f) / 0.90f).coerceIn(0f, 1f)
                 val speedCurve = normSpeed.pow(1.4f)
 
-                // Ataque instantâneo e responsivo aos transientes sonoros (sem delay)
-                val baseRiseAlpha = (0.72f + 0.26f * speedCurve).coerceIn(0.68f, 0.98f)
-                // Decaimento suave com amortecimento físico perfeito para batidas musicais
-                val baseFallAlpha = (0.12f + 0.24f * speedCurve).coerceIn(0.10f, 0.38f)
-                val peakFallAlpha = (0.015f + 0.035f * speedCurve).coerceIn(0.012f, 0.050f)
+                val baseRiseAlpha = (0.045f + 0.455f * speedCurve).coerceIn(0.035f, 0.60f)
+                val baseFallAlpha = (0.010f + 0.150f * speedCurve).coerceIn(0.008f, 0.20f)
+                val peakFallAlpha = (0.0018f + 0.012f * speedCurve).coerceIn(0.0015f, 0.018f)
 
                 for (i in 0 until NUM_BANDS) {
                     val rawTarget = incomingBands[i].coerceIn(0f, 1f)

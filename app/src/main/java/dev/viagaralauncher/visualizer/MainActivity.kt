@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -209,6 +210,7 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val settings by prefs.settings.collectAsState()
+    val frame by AudioVisualizerManager.frameFlow.collectAsState()
     val scope = rememberCoroutineScope()
 
     val updateInfo by UpdateManager.updateAvailable.collectAsState()
@@ -296,6 +298,66 @@ fun MainScreen(
             )
         }
 
+        // Botão Ligar/Desligar Visualizador (Minimalista)
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable {
+                    prefs.setEnabled(!settings.isEnabled)
+                },
+            color = if (settings.isEnabled) Color(0xFF1B2220) else Color(0xFF181818),
+            border = BorderStroke(
+                1.dp,
+                if (settings.isEnabled) settings.barColor.copy(alpha = 0.35f) else Color(0xFF2A2A2A)
+            ),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (settings.isEnabled) settings.barColor else Color(0xFF666666))
+                    )
+                    Column {
+                        Text(
+                            text = if (settings.isEnabled) "Visualizador Ativado" else "Visualizador Desativado",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (settings.isEnabled) Color.White else Color(0xFFAAAAAA)
+                        )
+                        Text(
+                            text = if (settings.isEnabled) "Captura ativa de áudio e animação" else "Toque para reativar o visualizador",
+                            fontSize = 11.sp,
+                            color = Color(0xFF777777)
+                        )
+                    }
+                }
+
+                Switch(
+                    checked = settings.isEnabled,
+                    onCheckedChange = { prefs.setEnabled(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = settings.barColor,
+                        checkedTrackColor = settings.barColor.copy(alpha = 0.40f),
+                        uncheckedThumbColor = Color(0xFF888888),
+                        uncheckedTrackColor = Color(0xFF2A2A2A)
+                    )
+                )
+            }
+        }
+
         // 1. Live Preview do Visualizador
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -320,7 +382,7 @@ fun MainScreen(
                         letterSpacing = 1.sp
                     )
 
-                    AudioStatusIndicator()
+                    AudioStatusIndicator(isEnabled = settings.isEnabled)
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -358,100 +420,7 @@ fun MainScreen(
             }
         }
 
-        // 2. Status de Root (UID 0)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = when (rootInfo.status) {
-                    RootStatus.GRANTED -> Color(0xFF0A2615)
-                    RootStatus.DENIED -> Color(0xFF2E1010)
-                    else -> Color(0xFF1E1E1E)
-                }
-            ),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = when (rootInfo.status) {
-                            RootStatus.GRANTED -> Icons.Default.CheckCircle
-                            RootStatus.DENIED -> Icons.Default.Warning
-                            else -> Icons.Default.Security
-                        },
-                        contentDescription = null,
-                        tint = when (rootInfo.status) {
-                            RootStatus.GRANTED -> Color(0xFF00E676)
-                            RootStatus.DENIED -> Color(0xFFFF5252)
-                            else -> Color(0xFF888888)
-                        },
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = when (rootInfo.status) {
-                                RootStatus.GRANTED -> "Permissão de Root Concedida"
-                                RootStatus.DENIED -> "Permissão de Root Negada"
-                                RootStatus.NOT_AVAILABLE -> "Root Não Encontrado"
-                                RootStatus.CHECKING -> "Verificando Root..."
-                            },
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = Color.White
-                        )
-                        if (rootInfo.manager.isNotEmpty()) {
-                            Text(
-                                text = "Gerenciador: ${rootInfo.manager}",
-                                fontSize = 11.sp,
-                                color = Color(0xFFAAAAAA)
-                            )
-                        }
-                    }
-
-                    if (isCheckingRoot) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White
-                        )
-                    } else {
-                        Button(
-                            onClick = { refreshRoot() },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF2A2A2A),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Verificar",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Verificar", fontSize = 12.sp)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = rootInfo.details,
-                    fontSize = 12.sp,
-                    color = Color(0xFFCCCCCC)
-                )
-            }
-        }
-
-        // 3. Velocidade do Visualizador
+        // 2. Velocidade da Balística
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
@@ -1016,107 +985,96 @@ fun MainScreen(
             }
         }
 
-        // 6. Configurações de Widgets e Overlay
-        Card(
+        // Status de Permissão Root (UID 0) - Minimalista no rodapé
+        Surface(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-            shape = RoundedCornerShape(18.dp)
+            color = Color(0xFF181818),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(
+                1.dp,
+                when (rootInfo.status) {
+                    RootStatus.GRANTED -> Color(0xFF00E676).copy(alpha = 0.35f)
+                    RootStatus.DENIED -> Color(0xFFFF5252).copy(alpha = 0.35f)
+                    else -> Color(0xFF2A2A2A)
+                }
+            )
         ) {
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Layers,
+                        imageVector = when (rootInfo.status) {
+                            RootStatus.GRANTED -> Icons.Default.CheckCircle
+                            RootStatus.DENIED -> Icons.Default.Warning
+                            else -> Icons.Default.Security
+                        },
                         contentDescription = null,
-                        tint = settings.barColor,
+                        tint = when (rootInfo.status) {
+                            RootStatus.GRANTED -> Color(0xFF00E676)
+                            RootStatus.DENIED -> Color(0xFFFF5252)
+                            else -> Color(0xFF888888)
+                        },
                         modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Widgets & Overlay Flutuante",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = Color.White
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Switch de Overlay Flutuante
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Widget Flutuante (Overlay)",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = "Exibe o visualizador em 60 FPS sobreposto na tela",
-                            fontSize = 11.sp,
-                            color = Color(0xFF888888)
-                        )
-                    }
-
-                    Switch(
-                        checked = settings.isFloatingEnabled,
-                        onCheckedChange = { enabled ->
-                            if (enabled) {
-                                onRequestOverlayPermission()
-                                prefs.setFloatingEnabled(true)
-                                FloatingVisualizerService.start(context)
-                            } else {
-                                prefs.setFloatingEnabled(false)
-                                FloatingVisualizerService.stop(context)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = settings.barColor,
-                            checkedTrackColor = settings.barColor.copy(alpha = 0.4f)
-                        )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Informação do Widget de Tela Inicial
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF141414))
-                        .padding(12.dp)
-                ) {
                     Column {
                         Text(
-                            text = "📱 Widget de Tela Inicial Disponível",
+                            text = when (rootInfo.status) {
+                                RootStatus.GRANTED -> "Permissão Root (UID 0)"
+                                RootStatus.DENIED -> "Root Negado"
+                                RootStatus.NOT_AVAILABLE -> "Root Não Encontrado"
+                                RootStatus.CHECKING -> "Verificando Root..."
+                            },
+                            fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        val subtitle = if (rootInfo.status == RootStatus.GRANTED && rootInfo.manager.isNotEmpty()) {
+                            "Concedido via ${rootInfo.manager}"
+                        } else {
+                            rootInfo.details
+                        }
                         Text(
-                            text = "Pressione e segure o dedo na tela inicial do seu celular para adicionar o widget 'Visualizador de Áudio'. Ele utilizará as cores e a balística configuradas aqui.",
+                            text = subtitle,
                             fontSize = 11.sp,
-                            color = Color(0xFFAAAAAA),
-                            lineHeight = 16.sp
+                            color = Color(0xFF888888),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (isCheckingRoot) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                } else {
+                    IconButton(
+                        onClick = { refreshRoot() },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Verificar Root",
+                            tint = Color(0xFFAAAAAA),
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
             }
         }
 
-        // 6. Atualizações do Aplicativo
+        // 5. Atualizações do Aplicativo
         UpdateStatusCard(
             updateInfo = updateInfo,
             isChecking = isCheckingUpdates,
@@ -1573,20 +1531,24 @@ private fun AnnotatedString.Builder.parseInlineMarkdown(line: String) {
 }
 
 @Composable
-private fun AudioStatusIndicator() {
+private fun AudioStatusIndicator(isEnabled: Boolean = true) {
     val frame by AudioVisualizerManager.frameFlow.collectAsState()
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300))
+                .background(
+                    if (!isEnabled) Color(0xFF666666)
+                    else if (frame.hasAudio) Color(0xFF00E676)
+                    else Color(0xFFFFB300)
+                )
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = if (frame.hasAudio) "60 FPS • Áudio Ativo" else "Aguardando Som",
+            text = if (!isEnabled) "Desativado" else if (frame.hasAudio) "Áudio Ativo" else "Aguardando Som",
             fontSize = 11.sp,
-            color = if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300)
+            color = if (!isEnabled) Color(0xFF888888) else if (frame.hasAudio) Color(0xFF00E676) else Color(0xFFFFB300)
         )
     }
 }
