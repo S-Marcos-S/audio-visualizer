@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Equalizer bars representing 14 bands -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M24,76 L28,76 L28,48 L24,48 Z M32,76 L36,76 L36,36 L32,36 Z M40,76 L44,76 L44,28 L40,28 Z M48,76 L52,76 L52,42 L48,42 Z M56,76 L60,76 L60,22 L56,22 Z M64,76 L68,76 L68,34 L64,34 Z M72,76 L76,76 L76,46 L72,46 Z M80,76 L84,76 L84,54 L80,54 Z" />
+    <!-- Floating peak caps -->
+    <path
+        android:fillColor="#FF4081"
+        android:pathData="M24,44 L28,44 L28,41 L24,41 Z M32,32 L36,32 L36,29 L32,29 Z M40,24 L44,24 L44,21 L40,21 Z M48,38 L52,38 L52,35 L48,35 Z M56,18 L60,18 L60,15 L56,15 Z M64,30 L68,30 L68,27 L64,27 Z M72,42 L76,42 L76,39 L72,39 Z M80,50 L84,50 L84,47 L80,47 Z" />
+</vector>

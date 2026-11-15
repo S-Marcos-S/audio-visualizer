@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Audio Visualizer</string>
+    <string name="widget_name">Visualizador de Áudio</string>
+    <string name="widget_description">Widget de espectro de áudio em tempo real</string>
+    <string name="root_status_granted">Acesso Root Ativo (UID 0)</string>
+    <string name="root_status_denied">Root Não Concedido</string>
+    <string name="root_desc_granted">Sessão 0 do AudioFlinger habilitada com sucesso.</string>
+    <string name="root_desc_denied">Necessário root (Magisk/KernelSU/APatch) para capturar o áudio global.</string>
+    <string name="btn_request_root">Verificar / Solicitar Root</string>
+    <string name="speed_label">Velocidade da Balística</string>
+    <string name="color_title">Paleta de Cores</string>
+    <string name="custom_colors">Cores Personalizadas</string>
+    <string name="bar_color">Cor das Barras</string>
+    <string name="peak_color">Cor dos Picos</string>
+    <string name="floating_widget_title">Widget Flutuante (Overlay)</string>
+    <string name="floating_widget_desc">Exibe o visualizador em 60 FPS sobreposto a qualquer aplicativo</string>
+    <string name="always_on_title">Modo Sempre Ativo (Preview)</string>
+    <string name="always_on_desc">Mantém o visualizador capturando continuamente mesmo sem MediaSession detectada</string>
+    <string name="waiting_audio">Aguardando reprodução de áudio...</string>
+    <string name="audio_active">Sinal de Áudio Detectado (60 FPS)</string>
+</resources>
